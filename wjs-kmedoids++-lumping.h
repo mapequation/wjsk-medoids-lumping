@@ -17,6 +17,16 @@ const double epsilon = 1e-15;
 
 unsigned stou(char *s);
 
+// Identical hashes for T,U and U,T, but that will never happen since T,U are ordered
+struct pairhash {
+public:
+  template <typename T, typename U>
+  std::size_t operator()(const pair<T, U> &x) const
+  {
+    return hash<T>()(x.first) ^ hash<U>()(x.second);
+  }
+};
+
 template <class T>
 inline std::string to_string (const T& t){
 	std::stringstream ss;
@@ -59,6 +69,7 @@ public:
 	int physId;
 	double outWeight;
 	bool active = true;
+	bool center = false;
 	map<int,double> links;
 	vector<string> contexts;
 };
@@ -75,7 +86,7 @@ StateNode::StateNode(int stateid, int physid, double outweight){
 class PhysNode{
 public:
 	PhysNode();
-	vector<int> stateNodeNonDanglingIndices;
+	vector<int> stateNodeIndices;
 	vector<int> stateNodeDanglingIndices;
 };
 
@@ -87,6 +98,8 @@ class StateNetwork{
 private:
 	void calcEntropyRate();
 	double wJSdiv(int stateId1, int stateId2);
+	void findCenters(PhysNode &physNode,vector<int> &centers,int &Ncenters);
+
 	string inFileName;
 	string outFileName;
 	std::mt19937 &mtRand;
@@ -96,21 +109,25 @@ private:
 	int Ndanglings = 0;
 	int Ncontexts = 0;
 	int NphysDanglings = 0;
+	int Nclu;
 	double totWeight = 0.0;
 	double entropyRate = 0.0;
 	unordered_map<int,PhysNode> physNodes;
+	unordered_map<pair<int,int>,double,pairhash> cachedWJSdiv;
 	vector<StateNode> stateNodes;
 
 public:
-	StateNetwork(string infilename,string outfilename,std::mt19937 &mtrand);
+	StateNetwork(string infilename,string outfilename,int nclu,std::mt19937 &mtrand);
 	
 	void lumpDanglings();
+	void lumpStateNodes();
 	void loadStateNetwork();
 	void printStateNetwork();
 
 };
 
-StateNetwork::StateNetwork(string infilename,string outfilename,std::mt19937 &mtrand) : mtRand(mtrand){
+StateNetwork::StateNetwork(string infilename,string outfilename,int nclu,std::mt19937 &mtrand) : mtRand(mtrand){
+	Nclu = nclu;
 	inFileName = infilename;
 	outFileName = outfilename;
 	mtRand = mtrand;
@@ -124,6 +141,10 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 
 	if(stateIndex1 > stateIndex2) // Swap to make stateIndex1 lowest 
 		swap(stateIndex1,stateIndex2);
+
+	unordered_map<pair<int,int>,double,pairhash>::iterator wJSdiv_it = cachedWJSdiv.find(make_pair(stateIndex1,stateIndex2));
+	if(wJSdiv_it != cachedWJSdiv.end())
+		return wJSdiv_it->second;
 
 	// The out-link weights of the state nodes
 	double ow1 = stateNodes[stateIndex1].outWeight;
@@ -146,7 +167,7 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 	
 	while(links1 != links1end || links2 != links2end){
 
-		if((links1 != links1end && links2 == links2end) || ((links2 != links2end) && (links1->first < links2->first))){
+		if((links1 != links1end && links2 == links2end) || ((links1 != links1end && links2 != links2end) && (links1->first < links2->first))){
 		// If the first state node has a link that the second has not
 
 			double p1 = links1->second/ow1;
@@ -156,7 +177,7 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 			links1++;
 
 		}
-		else if((links2 != links2end && links1 == links1end) || ((links1 != links1end) && (links2->first < links1->first))){
+		else if((links2 != links2end && links1 == links1end) || ((links1 != links1end && links2 != links2end) && (links2->first < links1->first))){
 		// If the second state node has a link that the second has not
 
 			double p2 = links2->second/ow2;
@@ -170,17 +191,18 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 
 			double p1 = links1->second/ow1;
 			h1 -= p1*log(p1);
-			links1++;
 			double p2 = links2->second/ow2;
 			h2 -= p2*log(p2);
-			links2++;
 			double p12 = pi1*links1->second/ow1 + pi2*links2->second/ow2;
 			h12 -= p12*log(p12);
+			links1++;
+			links2++;
 
 		}
 	}
-
-	return (w1+w2)*h12 - w1*h1 - w2*h2;
+	double div = (w1+w2)*h12 - w1*h1 - w2*h2;
+	cachedWJSdiv[make_pair(stateIndex1,stateIndex2)] = div;
+	return div;
 }
 
 void StateNetwork::calcEntropyRate(){
@@ -197,6 +219,77 @@ void StateNetwork::calcEntropyRate(){
 			entropyRate += it->outWeight/totWeight*h/log(2.0);
 		}
 	}
+
+}
+
+void StateNetwork::findCenters(PhysNode &physNode,vector<int> &centers,int &Ncenters){
+
+	int NPstateNodes = physNode.stateNodeIndices.size();
+
+	// Find random state node in physical node as first center
+	std::uniform_int_distribution<int> randInt(0,NPstateNodes-1);
+	int firstCenter = physNode.stateNodeIndices[randInt(mtRand)];
+	stateNodes[firstCenter].center = true;
+	centers[Ncenters] = firstCenter;
+	Ncenters++;
+
+	// Find Nclu-1 more centers based on the kmedoids++ algorithm
+	for(int i=1;i<Nclu;i++){
+		double maxPDiv = 0.0;
+		int maxPCenter = 0;	
+
+		for(int i=0;i<NPstateNodes;i++){
+			double maxDiv = 0.0;	
+			int stateNodeIndex = physNode.stateNodeIndices[i];
+			if(!stateNodes[stateNodeIndex].center){
+				for(int j=0;j<Ncenters;j++){
+					int stateNodeCenterIndex = centers[j];
+					double div = wJSdiv(stateNodeIndex,stateNodeCenterIndex);
+					if(div > maxDiv){
+						maxDiv = div;
+					}
+				}
+				if(maxDiv > maxPDiv){
+					maxPDiv = maxDiv;
+					maxPCenter = stateNodeIndex;
+				}				
+			}
+		}
+		stateNodes[maxPCenter].center = true;
+		centers[Ncenters] = maxPCenter;
+		Ncenters++;
+	}
+}
+
+void StateNetwork::lumpStateNodes(){
+
+	cout << "Lumping state nodes in each physical node:" << endl;
+
+	int Nlumpings = 0;
+	int Nprocessed = 0;
+
+	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
+
+		PhysNode &physNode = phys_it->second;
+		int NPstateNodes = physNode.stateNodeIndices.size();
+		
+		if(NPstateNodes > Nclu){
+
+			vector<int> centers(Nclu);	
+			int Ncenters = 0;
+			findCenters(physNode,centers,Ncenters);
+
+			Nlumpings++;
+
+			// Free cached divergences
+			cachedWJSdiv = unordered_map<pair<int,int>,double,pairhash>();
+
+		}
+		Nprocessed++;
+		cout << "\r-->Processed " << Nprocessed << " " << Nlumpings << "/" << Nprocessed << "                ";
+	}
+
+	cout << "-->Processed " << Nlumpings << " with more than " << Nclu << " state nodes." << endl;
 
 }
 
@@ -217,7 +310,7 @@ void StateNetwork::lumpDanglings(){
 		}
 		else{
 			// Lump all dangling state nodes into one state node in dangling physical nodes, and update the stateIds
-			int NnonDanglings = physNodes[it->physId].stateNodeNonDanglingIndices.size();
+			int NnonDanglings = physNodes[it->physId].stateNodeIndices.size();
 			if(NnonDanglings == 0){
 
 				// When all state nodes are dangling, lump them to the first dangling state node id of the physical node
@@ -247,12 +340,12 @@ void StateNetwork::lumpDanglings(){
 	for(vector<StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 
 		if(it->outWeight < epsilon){
-			int NnonDanglings = physNodes[it->physId].stateNodeNonDanglingIndices.size();
+			int NnonDanglings = physNodes[it->physId].stateNodeIndices.size();
 			if(NnonDanglings > 0){
 
 				std::uniform_int_distribution<int> randInt(0,NnonDanglings-1);
 				// Find random state node
-				int lumpedStateIndex = physNodes[it->physId].stateNodeNonDanglingIndices[randInt(mtRand)];
+				int lumpedStateIndex = physNodes[it->physId].stateNodeIndices[randInt(mtRand)];
 				// Add context to lumped state node
 				stateNodes[lumpedStateIndex].contexts.insert(stateNodes[lumpedStateIndex].contexts.begin(),it->contexts.begin(),it->contexts.end());
 				
@@ -272,9 +365,9 @@ void StateNetwork::lumpDanglings(){
 	cout << "-->Lumped " << Nlumpings << " dangling state nodes." << endl;
 	cout << "-->Found " << NphysDanglings << " dangling physical nodes. Lumped dangling state nodes into a single dangling state node." << endl;
 
-	cout << physNodes[1].stateNodeNonDanglingIndices.size() << endl;
+	cout << physNodes[1].stateNodeIndices.size() << endl;
 	for(int i=0;i<10;i++){
-		cout << wJSdiv(physNodes[1].stateNodeNonDanglingIndices[0],physNodes[1].stateNodeNonDanglingIndices[i]) << endl;
+		cout << wJSdiv(physNodes[1].stateNodeIndices[0],physNodes[1].stateNodeIndices[i]) << endl;
 	}
 }
 
@@ -325,7 +418,7 @@ void StateNetwork::loadStateNetwork(){
 	  	double outWeight = atof(buf.c_str());
 	  	totWeight += outWeight;
 			if(outWeight > epsilon)
-				physNodes[physId].stateNodeNonDanglingIndices.push_back(stateId);
+				physNodes[physId].stateNodeIndices.push_back(stateId);
 			else{
 				physNodes[physId].stateNodeDanglingIndices.push_back(stateId);
 				Ndanglings++;
