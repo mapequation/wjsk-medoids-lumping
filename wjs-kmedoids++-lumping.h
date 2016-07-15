@@ -61,6 +61,23 @@ vector<string> tokenize(const string& str,string& delimiters){
 }
 
 
+class MedoidsStateNode{
+public:
+	MedoidsStateNode();
+	MedoidsStateNode(int stateid);
+	int stateId;
+	bool center = false;
+	double minDiv = 1.0;
+	int minCenterStateId;
+};
+
+MedoidsStateNode::MedoidsStateNode(){
+};
+
+MedoidsStateNode::MedoidsStateNode(int stateid){
+	stateId = stateid;
+}
+
 class StateNode{
 public:
 	StateNode();
@@ -69,7 +86,6 @@ public:
 	int physId;
 	double outWeight;
 	bool active = true;
-	bool center = false;
 	map<int,double> links;
 	vector<string> contexts;
 };
@@ -98,7 +114,7 @@ class StateNetwork{
 private:
 	void calcEntropyRate();
 	double wJSdiv(int stateId1, int stateId2);
-	void findCenters(PhysNode &physNode,vector<int> &centers,int &Ncenters);
+	void findCenters(vector<MedoidsStateNode> &medoidsStateNodes,vector<int> &centers);
 
 	string inFileName;
 	string outFileName;
@@ -222,43 +238,57 @@ void StateNetwork::calcEntropyRate(){
 
 }
 
-void StateNetwork::findCenters(PhysNode &physNode,vector<int> &centers,int &Ncenters){
+void StateNetwork::findCenters(vector<MedoidsStateNode> &medoidsStateNodes,vector<int> &centers){
 
-	int NPstateNodes = physNode.stateNodeIndices.size();
+	int NPstateNodes = medoidsStateNodes.size();
+	int Ncenters = 0;
+	double sumMinDiv = 1.0*NPstateNodes; // Because minDiv is set to 1.0 for all state nodes
 
 	// Find random state node in physical node as first center
 	std::uniform_int_distribution<int> randInt(0,NPstateNodes-1);
-	int firstCenter = physNode.stateNodeIndices[randInt(mtRand)];
-	stateNodes[firstCenter].center = true;
-	centers[Ncenters] = firstCenter;
+	int firstCenterIndex = randInt(mtRand);
+	medoidsStateNodes[firstCenterIndex].center = true;
+	medoidsStateNodes[firstCenterIndex].minCenterStateId = medoidsStateNodes[firstCenterIndex].stateId;
+	sumMinDiv -= medoidsStateNodes[firstCenterIndex].minDiv;
+	// Put the center in first non-center position (Ncenters = 0) by swapping elements
+	swap(medoidsStateNodes[Ncenters],medoidsStateNodes[firstCenterIndex]);
 	Ncenters++;
 
-	// Find Nclu-1 more centers based on the kmedoids++ algorithm
-	for(int i=1;i<Nclu;i++){
-		double maxPDiv = 0.0;
-		int maxPCenter = 0;	
 
-		for(int i=0;i<NPstateNodes;i++){
-			double maxDiv = 0.0;	
-			int stateNodeIndex = physNode.stateNodeIndices[i];
-			if(!stateNodes[stateNodeIndex].center){
-				for(int j=0;j<Ncenters;j++){
-					int stateNodeCenterIndex = centers[j];
-					double div = wJSdiv(stateNodeIndex,stateNodeCenterIndex);
-					if(div > maxDiv){
-						maxDiv = div;
-					}
-				}
-				if(maxDiv > maxPDiv){
-					maxPDiv = maxDiv;
-					maxPCenter = stateNodeIndex;
-				}				
+	// Find Nclu-1 more centers based on the kmedoids++ algorithm
+	while(Ncenters < Nclu){
+		int lastClusterId = medoidsStateNodes[Ncenters-1].stateId;
+		for(int i=Ncenters;i<NPstateNodes;i++){
+			double div = wJSdiv(medoidsStateNodes[i].stateId,lastClusterId);
+			if(div < medoidsStateNodes[i].minDiv){
+				// Found new minimum divergence to center
+				sumMinDiv -= medoidsStateNodes[i].minDiv;
+				sumMinDiv += div;
+				medoidsStateNodes[i].minDiv = div;
+				medoidsStateNodes[i].minCenterStateId = lastClusterId;
 			}
 		}
-		stateNodes[maxPCenter].center = true;
-		centers[Ncenters] = maxPCenter;
+		// Pick new center proportional to minimum divergence
+		std::uniform_int_distribution<double> randDouble(0.0,sumMinDiv);
+		double randMinDivSum = randDouble(mtRand);
+		double minDivSum = 0.0;
+		int newCenterIndex = Ncenters;
+		for(int i=Ncenters;i<NPstateNodes;i++){
+			minDivSum += medoidsStateNodes[i].minDiv;
+			if(minDivSum > randMinDivSum){
+				newCenterIndex = i;
+				break;
+			}
+		}
+		medoidsStateNodes[newCenterIndex].center = true;
+		medoidsStateNodes[newCenterIndex].minCenterStateId = medoidsStateNodes[newCenterIndex].stateId;
+		sumMinDiv -= medoidsStateNodes[newCenterIndex].minDiv;
+		// Put the center in first non-center position by swapping elements
+		swap(medoidsStateNodes[Ncenters],medoidsStateNodes[newCenterIndex]);
 		Ncenters++;
+
 	}
+
 }
 
 void StateNetwork::lumpStateNodes(){
@@ -275,9 +305,15 @@ void StateNetwork::lumpStateNodes(){
 		
 		if(NPstateNodes > Nclu){
 
+			// Initialize vector with state nodes in physical node with minimum necessary information
+			vector<MedoidsStateNode> medoidsStateNodes = vector<MedoidsStateNode>(NPstateNodes);
+			for(int i=0;i<NPstateNodes;i++){
+				medoidsStateNodes[i].stateId = physNode.stateNodeIndices[i];
+			}
+
+			// Initialize vector to store centers
 			vector<int> centers(Nclu);	
-			int Ncenters = 0;
-			findCenters(physNode,centers,Ncenters);
+			findCenters(medoidsStateNodes,centers);
 
 			Nlumpings++;
 
@@ -287,6 +323,8 @@ void StateNetwork::lumpStateNodes(){
 		}
 		Nprocessed++;
 		cout << "\r-->Processed " << Nprocessed << " " << Nlumpings << "/" << Nprocessed << "                ";
+		if(Nprocessed == 5000)
+			break;
 	}
 
 	cout << "-->Processed " << Nlumpings << " with more than " << Nclu << " state nodes." << endl;
