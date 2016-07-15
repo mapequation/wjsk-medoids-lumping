@@ -114,7 +114,8 @@ class StateNetwork{
 private:
 	void calcEntropyRate();
 	double wJSdiv(int stateId1, int stateId2);
-	void findCenters(vector<MedoidsStateNode> &medoidsStateNodes,vector<int> &centers);
+	void findCenters(vector<MedoidsStateNode> &medoidsStateNodes);
+	void performLumping(vector<MedoidsStateNode> &medoidsStateNodes);
 
 	string inFileName;
 	string outFileName;
@@ -135,7 +136,7 @@ private:
 public:
 	StateNetwork(string infilename,string outfilename,int nclu,std::mt19937 &mtrand);
 	
-	void lumpDanglings();
+	// void lumpDanglings();
 	void lumpStateNodes();
 	void loadStateNetwork();
 	void printStateNetwork();
@@ -222,6 +223,8 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 }
 
 void StateNetwork::calcEntropyRate(){
+
+	cout << "Calculating entropy rate:" << endl;
 	
 	entropyRate = 0.0;
 
@@ -236,9 +239,39 @@ void StateNetwork::calcEntropyRate(){
 		}
 	}
 
+	cout << "-->Entropy rate in bits: " << entropyRate << endl;
+
 }
 
-void StateNetwork::findCenters(vector<MedoidsStateNode> &medoidsStateNodes,vector<int> &centers){
+void StateNetwork::performLumping(vector<MedoidsStateNode> &medoidsStateNodes){
+
+	int NPstateNodes = medoidsStateNodes.size();
+	// Update stateNodes to reflect the lumping
+	for(int i=Nclu;i<NPstateNodes;i++){
+
+		StateNode &lumpedStateNode = stateNodes[medoidsStateNodes[i].minCenterStateId];
+		StateNode &lumpingStateNode = stateNodes[medoidsStateNodes[i].stateId];
+
+		// Add context to lumped state node
+		lumpedStateNode.contexts.insert(lumpedStateNode.contexts.begin(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
+		// Add links to lumped state node
+		Nlinks  -= lumpedStateNode.links.size() + lumpingStateNode.links.size(); // To update the global number of links
+		for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++)
+			lumpedStateNode.links[link_it->first] += link_it->second;
+		Nlinks += lumpedStateNode.links.size(); // To update the global number of links
+		lumpedStateNode.outWeight += lumpingStateNode.outWeight;
+
+		// Update state id of lumping state node to point to lumped state node and make it inactive
+		lumpingStateNode.stateId = lumpedStateNode.stateId;
+		lumpingStateNode.active = false;
+
+	}
+
+}
+
+void StateNetwork::findCenters(vector<MedoidsStateNode> &medoidsStateNodes){
+	// Modifies the order of medoidsStateNodes such thar the fist Nclu will be the centers.
+	// Also, all elements will contain the stateId it is closest to.
 
 	int NPstateNodes = medoidsStateNodes.size();
 	int Ncenters = 0;
@@ -286,8 +319,20 @@ void StateNetwork::findCenters(vector<MedoidsStateNode> &medoidsStateNodes,vecto
 		// Put the center in first non-center position by swapping elements
 		swap(medoidsStateNodes[Ncenters],medoidsStateNodes[newCenterIndex]);
 		Ncenters++;
-
 	}
+
+	// Check if last center gives minimum divergence for some state nodes
+	int lastClusterId = medoidsStateNodes[Ncenters-1].stateId;
+		for(int i=Ncenters;i<NPstateNodes;i++){
+			double div = wJSdiv(medoidsStateNodes[i].stateId,lastClusterId);
+			if(div < medoidsStateNodes[i].minDiv){
+				// Found new minimum divergence to center
+				sumMinDiv -= medoidsStateNodes[i].minDiv;
+				sumMinDiv += div;
+				medoidsStateNodes[i].minDiv = div;
+				medoidsStateNodes[i].minCenterStateId = lastClusterId;
+			}
+		}
 
 }
 
@@ -311,102 +356,24 @@ void StateNetwork::lumpStateNodes(){
 				medoidsStateNodes[i].stateId = physNode.stateNodeIndices[i];
 			}
 
-			// Initialize vector to store centers
-			vector<int> centers(Nclu);	
-			findCenters(medoidsStateNodes,centers);
-
-			Nlumpings++;
+			// Initialize vector to store centers and stateId of closest center
+			findCenters(medoidsStateNodes);
 
 			// Free cached divergences
 			cachedWJSdiv = unordered_map<pair<int,int>,double,pairhash>();
 
+			// Perform the lumping and update stateNodes
+			performLumping(medoidsStateNodes);
+			Nlumpings += NPstateNodes - Nclu;
+			NstateNodes -= NPstateNodes - Nclu;
+
 		}
 		Nprocessed++;
-		cout << "\r-->Processed " << Nprocessed << " " << Nlumpings << "/" << Nprocessed << "                ";
-		if(Nprocessed == 5000)
-			break;
+		cout << "\r-->Lumped " << Nlumpings << " state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
 	}
 
-	cout << "-->Processed " << Nlumpings << " with more than " << Nclu << " state nodes." << endl;
+	cout << endl;
 
-}
-
-void StateNetwork::lumpDanglings(){
-
-	unordered_set<int> physDanglings;
-	int Nlumpings = 0;
-
-	cout << "Lumping dangling state nodes:" << endl;
-
-	// First loop sets updated stateIds of non-dangling state nodes and state nodes in dangling physical nodes, which are lumped into one state node
-	int updatedStateId = 0;
-	for(vector<StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
-		if(it->outWeight > epsilon){
-			// Set updated stateIds for non-dangling state nodes
-			it->stateId = updatedStateId;
-			updatedStateId++;
-		}
-		else{
-			// Lump all dangling state nodes into one state node in dangling physical nodes, and update the stateIds
-			int NnonDanglings = physNodes[it->physId].stateNodeIndices.size();
-			if(NnonDanglings == 0){
-
-				// When all state nodes are dangling, lump them to the first dangling state node id of the physical node
-				physDanglings.insert(it->physId);
-				// Id of first dangling state node
-				int lumpedStateIndex = physNodes[it->physId].stateNodeDanglingIndices[0];
-				if(lumpedStateIndex == it->stateId){
-					// The first dangling state node in dangling physical node remains
-					it->stateId = updatedStateId;
-					updatedStateId++;
-				}	
-				else{
-					// Add context to lumped state node
-					stateNodes[lumpedStateIndex].contexts.insert(stateNodes[lumpedStateIndex].contexts.begin(),it->contexts.begin(),it->contexts.end());
-					// Update state id to point to lumped state node with upodated stateId and make it inactive
-					it->stateId = stateNodes[lumpedStateIndex].stateId;
-					it->active = false;
-					// Number of state nodes reduces by 1
-					NstateNodes--;
-					Nlumpings++;
-				}	
-			}
-		}
-	}
-
-	// Second loop sets updated stateIds of dangling state nodes in physical nodes with non-dangling state nodes
-	for(vector<StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
-
-		if(it->outWeight < epsilon){
-			int NnonDanglings = physNodes[it->physId].stateNodeIndices.size();
-			if(NnonDanglings > 0){
-
-				std::uniform_int_distribution<int> randInt(0,NnonDanglings-1);
-				// Find random state node
-				int lumpedStateIndex = physNodes[it->physId].stateNodeIndices[randInt(mtRand)];
-				// Add context to lumped state node
-				stateNodes[lumpedStateIndex].contexts.insert(stateNodes[lumpedStateIndex].contexts.begin(),it->contexts.begin(),it->contexts.end());
-				
-				// Update state id to point to lumped state node and make it inactive
-				it->stateId = stateNodes[lumpedStateIndex].stateId;
-
-				it->active = false;
-				// Number of state nodes reduces by 1
-				NstateNodes--;
-				Nlumpings++;
-
-			}
-		}
-	}
-
-	NphysDanglings = physDanglings.size();
-	cout << "-->Lumped " << Nlumpings << " dangling state nodes." << endl;
-	cout << "-->Found " << NphysDanglings << " dangling physical nodes. Lumped dangling state nodes into a single dangling state node." << endl;
-
-	cout << physNodes[1].stateNodeIndices.size() << endl;
-	for(int i=0;i<10;i++){
-		cout << wJSdiv(physNodes[1].stateNodeIndices[0],physNodes[1].stateNodeIndices[i]) << endl;
-	}
 }
 
 void StateNetwork::loadStateNetwork(){
@@ -588,3 +555,81 @@ void StateNetwork::printStateNetwork(){
 	cout << "done!" << endl;
 
 }
+
+// void StateNetwork::lumpDanglings(){
+
+// 	unordered_set<int> physDanglings;
+// 	int Nlumpings = 0;
+
+// 	cout << "Lumping dangling state nodes:" << endl;
+
+// 	// First loop sets updated stateIds of non-dangling state nodes and state nodes in dangling physical nodes, which are lumped into one state node
+// 	int updatedStateId = 0;
+// 	for(vector<StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+// 		if(it->outWeight > epsilon){
+// 			// Set updated stateIds for non-dangling state nodes
+// 			it->stateId = updatedStateId;
+// 			updatedStateId++;
+// 		}
+// 		else{
+// 			// Lump all dangling state nodes into one state node in dangling physical nodes, and update the stateIds
+// 			int NnonDanglings = physNodes[it->physId].stateNodeIndices.size();
+// 			if(NnonDanglings == 0){
+
+// 				// When all state nodes are dangling, lump them to the first dangling state node id of the physical node
+// 				physDanglings.insert(it->physId);
+// 				// Id of first dangling state node
+// 				int lumpedStateIndex = physNodes[it->physId].stateNodeDanglingIndices[0];
+// 				if(lumpedStateIndex == it->stateId){
+// 					// The first dangling state node in dangling physical node remains
+// 					it->stateId = updatedStateId;
+// 					updatedStateId++;
+// 				}	
+// 				else{
+// 					// Add context to lumped state node
+// 					stateNodes[lumpedStateIndex].contexts.insert(stateNodes[lumpedStateIndex].contexts.begin(),it->contexts.begin(),it->contexts.end());
+// 					// Update state id to point to lumped state node with upodated stateId and make it inactive
+// 					it->stateId = stateNodes[lumpedStateIndex].stateId;
+// 					it->active = false;
+// 					// Number of state nodes reduces by 1
+// 					NstateNodes--;
+// 					Nlumpings++;
+// 				}	
+// 			}
+// 		}
+// 	}
+
+// 	// Second loop sets updated stateIds of dangling state nodes in physical nodes with non-dangling state nodes
+// 	for(vector<StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+
+// 		if(it->outWeight < epsilon){
+// 			int NnonDanglings = physNodes[it->physId].stateNodeIndices.size();
+// 			if(NnonDanglings > 0){
+
+// 				std::uniform_int_distribution<int> randInt(0,NnonDanglings-1);
+// 				// Find random state node
+// 				int lumpedStateIndex = physNodes[it->physId].stateNodeIndices[randInt(mtRand)];
+// 				// Add context to lumped state node
+// 				stateNodes[lumpedStateIndex].contexts.insert(stateNodes[lumpedStateIndex].contexts.begin(),it->contexts.begin(),it->contexts.end());
+				
+// 				// Update state id to point to lumped state node and make it inactive
+// 				it->stateId = stateNodes[lumpedStateIndex].stateId;
+
+// 				it->active = false;
+// 				// Number of state nodes reduces by 1
+// 				NstateNodes--;
+// 				Nlumpings++;
+
+// 			}
+// 		}
+// 	}
+
+// 	NphysDanglings = physDanglings.size();
+// 	cout << "-->Lumped " << Nlumpings << " dangling state nodes." << endl;
+// 	cout << "-->Found " << NphysDanglings << " dangling physical nodes. Lumped dangling state nodes into a single dangling state node." << endl;
+
+// 	cout << physNodes[1].stateNodeIndices.size() << endl;
+// 	for(int i=0;i<10;i++){
+// 		cout << wJSdiv(physNodes[1].stateNodeIndices[0],physNodes[1].stateNodeIndices[i]) << endl;
+// 	}
+// }
