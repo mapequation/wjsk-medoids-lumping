@@ -1,8 +1,8 @@
 # Various flags
 CXX  = clang++
 LINK = $(CXX)
-CXXFLAGS = -std=c++11 -Wall -g
-#CXXFLAGS = -std=c++11 -Wall -O3
+# CXXFLAGS = -std=c++11 -Wall -g
+CXXFLAGS = -std=c++11 -Wall -O3
 LFLAGS = -lm
 
 TARGET  = wjs-kmedoids++-lumping

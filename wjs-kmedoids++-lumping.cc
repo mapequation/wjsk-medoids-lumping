@@ -70,23 +70,16 @@ int main(int argc,char *argv[]){
   cout << "-->Will read state network from file: " << inFileName << endl;
   cout << "-->Will write processed state network to file: " << outFileName << endl;
 
-  mt19937 mtRand(seed);
+  std::mt19937 mtRand(seed);
 
   StateNetwork statenetwork(inFileName,outFileName,Nclu,mtRand);
 
-  while(statenetwork.loadStateNetworkBatch()){
-    statenetwork.lumpStateNodes();
-    if(statenetwork.keepReading || statenetwork.Nbatches > 1){
-      statenetwork.printStateNetworkBatch();
-      statenetwork.concludeBatch();
-    }
-    else{
-      statenetwork.printStateNetwork();
-      break;
-    }
-  }
+  statenetwork.loadStateNetwork();
 
-  if(statenetwork.Nbatches > 1)
-    statenetwork.compileBatches();
+  // statenetwork.lumpDanglings();
+
+  statenetwork.lumpStateNodes();
+
+  statenetwork.printStateNetwork();
 
 }
