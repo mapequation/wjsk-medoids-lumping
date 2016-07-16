@@ -184,8 +184,8 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 	double ow1 = stateNodes[stateIndex1].outWeight;
 	double ow2 = stateNodes[stateIndex2].outWeight;
 	// Normalized weights over entire network
-	double w1 = ow1/totWeight;
-	double w2 = ow2/totWeight;
+	double w1 = ow1/weight;
+	double w2 = ow2/weight;
 	// Normalized weights over state nodes 1 and 2
 	double pi1 = w1 / (w1 + w2);
 	double pi2 = w2 / (w1 + w2);
@@ -356,7 +356,7 @@ void StateNetwork::findCenters(vector<LocalStateNode> &localStateNodes){
 	Ncenters++;
 
 
-	// Find Nclu-1 more centers based on the klocal++ algorithm
+	// Find Nclu-1 more centers based on the k++ algorithm
 	while(Ncenters < Nclu){
 		int lastClusterId = localStateNodes[Ncenters-1].stateId;
 		for(int i=Ncenters;i<NPstateNodes;i++){
