@@ -20,7 +20,7 @@ int main(int argc,char *argv[]){
   cout << endl;
 
   // Parse command input
-  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] -k <number of clusters> input_state_network.net output_state_network.net\n";
+  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] -k <number of clusters> -batchoutput input_state_network.net output_state_network.net\n";
   if( argc == 1 ){
     cout << CALL_SYNTAX;
     exit(-1);
@@ -33,6 +33,7 @@ int main(int argc,char *argv[]){
 
   int argNr = 1;
   int Nclu = 100;
+  double batchOutput = false;
   while(argNr < argc){
     if(to_string(argv[argNr]) == "-h"){
       cout << CALL_SYNTAX;
@@ -41,6 +42,10 @@ int main(int argc,char *argv[]){
     else if(to_string(argv[argNr]) == "-s"){
       argNr++;
       seed = atoi(argv[argNr]);
+      argNr++;
+    }
+    else if(to_string(argv[argNr]) == "-batchoutput"){
+      batchOutput = true;
       argNr++;
     }
     else if(to_string(argv[argNr]) == "-k"){
@@ -72,7 +77,7 @@ int main(int argc,char *argv[]){
 
   mt19937 mtRand(seed);
 
-  StateNetwork statenetwork(inFileName,outFileName,Nclu,mtRand);
+  StateNetwork statenetwork(inFileName,outFileName,Nclu,batchOutput,mtRand);
 
   while(statenetwork.loadStateNetworkBatch()){
     statenetwork.lumpStateNodes();

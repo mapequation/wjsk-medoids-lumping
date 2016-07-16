@@ -101,19 +101,24 @@ private:
 	void performLumping(vector<LocalStateNode> &localStateNodes);
 	bool readLines(string &line,vector<string> &lines);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line,int &batchNr);
+	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line);
 
 	// For all batches
 	string inFileName;
 	string outFileName;
 	string tmpOutFileName;
+	string tmpOutFileNameStates;
+	string tmpOutFileNameLinks;
+	string tmpOutFileNameContexts;
+	bool batchOutput = false;
 	mt19937 &mtRand;
 	ifstream ifs;
-  string line = "First line";
-  double totWeight = 0.0;
-  int updatedStateId = 0;
+  	string line = "First line";
+  	double totWeight = 0.0;
+  	int updatedStateId = 0;
 	double entropyRate = 0.0;
 	unordered_map<int,int> completeStateNodeIdMapping;
-  int totNphysNodes = 0;
+  	int totNphysNodes = 0;
 	int totNstateNodes = 0;
 	int totNlinks = 0;
 	int totNdanglings = 0;
@@ -135,7 +140,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string infilename,string outfilename,int nclu,std::mt19937 &mtrand);
+	StateNetwork(string infilename,string outfilename,int nclu,bool batchoutput,std::mt19937 &mtrand);
 	
 	void lumpStateNodes();
 	bool loadStateNetworkBatch();
@@ -149,12 +154,16 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string infilename,string outfilename,int nclu,std::mt19937 &mtrand) : mtRand(mtrand){
+StateNetwork::StateNetwork(string infilename,string outfilename,int nclu,bool batchoutput,std::mt19937 &mtrand) : mtRand(mtrand){
 	Nclu = nclu;
 	inFileName = infilename;
 	outFileName = outfilename;
 	tmpOutFileName = string(outFileName).append("_tmp");
+	tmpOutFileNameStates = string(outFileName).append("_tmpstates");
+	tmpOutFileNameLinks = string(outFileName).append("_tmplinks");
+	tmpOutFileNameContexts = string(outFileName).append("_tmpcontexts");
 	mtRand = mtrand;
+	batchOutput = batchoutput;
 
 	// Open state network
 	ifs.open(inFileName.c_str());
@@ -543,7 +552,6 @@ bool StateNetwork::loadStateNetworkBatch(){
 	//Process states
 	cout << "-->Processing " << NstateNodes  << " state nodes..." << flush;
 	for(int i=0;i<NstateNodes;i++){
-
 		ss.clear();
 		ss.str(stateLines[i]);
 		ss >> buf;
@@ -567,27 +575,27 @@ bool StateNetwork::loadStateNetworkBatch(){
 	// Process links 
 	cout << "-->Processing " << Nlinks  << " links..." << flush;
 	for(int i=0;i<Nlinks;i++){
-			ss.clear();
-			ss.str(linkLines[i]);
-			ss >> buf;
-			int source = atoi(buf.c_str());
-			ss >> buf;
-			int target = atoi(buf.c_str());
-			ss >> buf;
-			double linkWeight = atof(buf.c_str());
-			stateNodes[source].links[target] = linkWeight;
+		ss.clear();
+		ss.str(linkLines[i]);
+		ss >> buf;
+		int source = atoi(buf.c_str());
+		ss >> buf;
+		int target = atoi(buf.c_str());
+		ss >> buf;
+		double linkWeight = atof(buf.c_str());
+		stateNodes[source].links[target] = linkWeight;
 	}
  	cout << "done!" << endl;
 
 	// Process contexts
 	cout << "-->Processing " << Ncontexts  << " contexts..." << flush;
 	for(int i=0;i<Ncontexts;i++){
-			ss.clear();
-			ss.str(contextLines[i]);
-			ss >> buf;
-			int stateNodeId = atoi(buf.c_str());
-			string context = contextLines[i].substr(buf.length()+1);
-			stateNodes[stateNodeId].contexts.push_back(context);
+		ss.clear();
+		ss.str(contextLines[i]);
+		ss >> buf;
+		int stateNodeId = atoi(buf.c_str());
+		string context = contextLines[i].substr(buf.length()+1);
+		stateNodes[stateNodeId].contexts.push_back(context);
 	}
 	cout << "done!" << endl;
 
@@ -598,32 +606,55 @@ bool StateNetwork::loadStateNetworkBatch(){
 
 void StateNetwork::printStateNetworkBatch(){
 
+	cout << "Writing temporary results:" << endl;
+
   ofstream ofs;
-	if(Nbatches == 1){ // Start with empty file for first batch
-		ofs.open(tmpOutFileName.c_str());
-	}
-	else{ // Append to existing file
-		ofs.open(tmpOutFileName.c_str(),ofstream::app);
-	}
-	cout << "Writing temporary results to " << tmpOutFileName << ":" << endl;
+  if(batchOutput){
+  	if(Nbatches == 1){ // Start with empty file for first batch
+			ofs.open(tmpOutFileName.c_str());
+		}
+		else{ // Append to existing file
+			ofs.open(tmpOutFileName.c_str(),ofstream::app);
+		}
+		ofs << "===== " << Nbatches << " =====\n";
+		ofs << "*States\n";
+		ofs << "#stateId ==> (physicalId, outWeight)\n";
+  }
+  else{
+  	 if(Nbatches == 1){ // Start with empty file for first batch
+			ofs.open(tmpOutFileNameStates.c_str());
+		}
+		else{ // Append to existing file
+			ofs.open(tmpOutFileNameStates.c_str(),ofstream::app);
+		}
+  }
 
 	cout << "-->Writing " << NstateNodes << " state nodes..." << flush;
 	// To order state nodes by id
 	map<int,int> orderedStateNodeIds;
 	for(unordered_map<int,int>::iterator it = stateNodeIdMapping.begin(); it != stateNodeIdMapping.end(); it++)
  		orderedStateNodeIds[it->second] =	it->first;
-	ofs << "===== " << Nbatches << " =====\n";
-	ofs << "*States\n";
-	ofs << "#stateId ==> (physicalId, outWeight)\n";
+
 	for(map<int,int>::iterator it = orderedStateNodeIds.begin(); it != orderedStateNodeIds.end(); it++){
 		StateNode &stateNode = stateNodes[it->second];
 		ofs << stateNode.stateId << " " << stateNode.physId << " " << stateNode.outWeight << "\n";
 	}
 	cout << "done!" << endl;
 
+	if(batchOutput){
+		ofs << "*Links\n";
+		ofs << "#(source target) ==> weight\n";
+	}
+	else{
+		ofs.close();
+		if(Nbatches == 1){ // Start with empty file for first batch
+			ofs.open(tmpOutFileNameLinks.c_str());
+		}
+		else{ // Append to existing file
+			ofs.open(tmpOutFileNameLinks.c_str(),ofstream::app);
+		}
+	}
 	cout << "-->Writing " << Nlinks << " links..." << flush;
-	ofs << "*Links\n";
-	ofs << "#(source target) ==> weight\n";
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 		StateNode &stateNode = it->second;
 		if(stateNode.active){
@@ -634,9 +665,20 @@ void StateNetwork::printStateNetworkBatch(){
 	}
 	cout << "done!" << endl;
 
+	if(batchOutput){
+		ofs << "*Contexts \n";
+		ofs << "#stateId <== (physicalId priorId [history...])\n";
+	}
+	else{
+		ofs.close();
+		if(Nbatches == 1){ // Start with empty file for first batch
+			ofs.open(tmpOutFileNameContexts.c_str());
+		}
+		else{ // Append to existing file
+			ofs.open(tmpOutFileNameContexts.c_str(),ofstream::app);
+		}
+	}
 	cout << "-->Writing " << Ncontexts << " contexts..." << flush;
-	ofs << "*Contexts \n";
-	ofs << "#stateId <== (physicalId priorId [history...])\n";
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 		StateNode &stateNode = it->second;
 		if(stateNode.active){
@@ -672,7 +714,6 @@ void StateNetwork::printStateNetwork(){
 	map<int,int> orderedStateNodeIds;
 	for(unordered_map<int,int>::iterator it = stateNodeIdMapping.begin(); it != stateNodeIdMapping.end(); it++)
  		orderedStateNodeIds[it->second] =	it->first;
-	ofs << "===== " << Nbatches << " =====\n";
 	ofs << "*States\n";
 	ofs << "#stateId ==> (physicalId, outWeight)\n";
 	for(map<int,int>::iterator it = orderedStateNodeIds.begin(); it != orderedStateNodeIds.end(); it++){
@@ -736,12 +777,13 @@ void StateNetwork::concludeBatch(){
 	stateNodeIdMapping.clear();
 	physNodes.clear();
 	stateNodes.clear();
+	cachedWJSdiv.clear();
 
 }
 
 void StateNetwork::compileBatches(){
 
-  ifstream ifs_tmp(tmpOutFileName.c_str());
+
   ofstream ofs(outFileName);
   string buf;
 	istringstream ss;
@@ -763,53 +805,93 @@ void StateNetwork::compileBatches(){
 	cout << "done!" << endl;
 
 	cout << "-->Relabeling and writing " << totNstateNodes << " state nodes, " << totNlinks << " links, and " << totNcontexts << " contexts:" << endl;
-	// Copy lines directly until data format
-	while(getline(ifs_tmp,line)){
-		if(line[0] == '*'){
-			break;	
-		}
-		ofs << line << "\n";
-	}
-	while(!ifs_tmp.eof()){
 
-		if(!writeStates && !writeLinks && !writeContexts){
-			cout << "-->Batch " << batchNr << "/" << Nbatches << endl;
+	if(batchOutput){
+
+		ifstream ifs_tmp(tmpOutFileName.c_str());
+	
+		// Copy lines directly until data format
+		while(getline(ifs_tmp,line)){
+			if(line[0] == '*'){
+				break;	
+			}
+			ofs << line << "\n";
 		}
-		ofs << line << "\n";
-		ss.clear();
-		ss.str(line);
-		ss >> buf;
-		if(buf == "*States"){
-			cout << "-->Writing state nodes..." << flush;
-			writeStates = true;
-			WriteMode writeMode = STATENODES;
-			writeLines(ifs_tmp,ofs,writeMode,line,batchNr);
+		while(!ifs_tmp.eof()){
+	
+			if(!writeStates && !writeLinks && !writeContexts){
+				cout << "-->Batch " << batchNr << "/" << Nbatches << endl;
+			}
+			ofs << line << "\n";
+			ss.clear();
+			ss.str(line);
+			ss >> buf;
+			if(buf == "*States"){
+				cout << "-->Writing state nodes..." << flush;
+				writeStates = true;
+				WriteMode writeMode = STATENODES;
+				writeLines(ifs_tmp,ofs,writeMode,line,batchNr);
+			}
+			else if(buf == "*Links"){
+				cout << "-->Writing links..." << flush;
+				writeLinks = true;
+				WriteMode writeMode = LINKS;
+				writeLines(ifs_tmp,ofs,writeMode,line,batchNr);
+			}
+			else if(buf == "*Contexts"){
+				cout << "-->Writing contexts..." << flush;
+				writeContexts = true;
+				WriteMode writeMode = CONTEXTS;
+				writeLines(ifs_tmp,ofs,writeMode,line,batchNr);
+			}
+			else{
+				cout << "Failed on line: " << line << endl;
+			}
+			cout << "done!" << endl;
+			if(writeStates && writeLinks && writeContexts){
+				writeStates = false;
+				writeLinks = false;
+				writeContexts = false;
+				batchNr++;
+			}
 		}
-		else if(buf == "*Links"){
-			cout << "-->Writing links..." << flush;
-			writeLinks = true;
-			WriteMode writeMode = LINKS;
-			writeLines(ifs_tmp,ofs,writeMode,line,batchNr);
-		}
-		else if(buf == "*Contexts"){
-			cout << "-->Writing contexts..." << flush;
-			writeContexts = true;
-			WriteMode writeMode = CONTEXTS;
-			writeLines(ifs_tmp,ofs,writeMode,line,batchNr);
-		}
-		else{
-			cout << "Failed on line: " << line << endl;
-		}
+		remove( tmpOutFileName.c_str() );
+	}
+	else{
+
+		cout << "-->Writing " << totNstateNodes << " state nodes..." << flush;
+		ofs << "*States\n";
+		ofs << "#stateId ==> (physicalId, outWeight)\n";
+		ifstream ifs_tmp(tmpOutFileNameStates.c_str());
+		WriteMode writeMode = STATENODES;
+		writeLines(ifs_tmp,ofs,writeMode,line);	
+		ifs_tmp.close();
 		cout << "done!" << endl;
-		if(writeStates && writeLinks && writeContexts){
-			writeStates = false;
-			writeLinks = false;
-			writeContexts = false;
-			batchNr++;
-		}
-	}
 
-	remove( tmpOutFileName.c_str() );
+
+		cout << "-->Writing " << totNlinks << " links..." << flush;
+		ofs << "*Links\n";
+		ofs << "#(source target) ==> weight\n";
+		ifs_tmp.open(tmpOutFileNameLinks.c_str());
+		writeMode = LINKS;
+		writeLines(ifs_tmp,ofs,writeMode,line);	
+		ifs_tmp.close();
+		cout << "done!" << endl;
+
+		cout << "-->Writing " << totNcontexts << " contexts..." << flush;
+		ofs << "*Contexts \n";
+		ofs << "#stateId <== (physicalId priorId [history...])\n";		
+		ifs_tmp.open(tmpOutFileNameContexts.c_str());		
+		writeMode = CONTEXTS;
+		writeLines(ifs_tmp,ofs,writeMode,line);	
+		ifs_tmp.close();
+		cout << "done!" << endl;
+
+
+		remove( tmpOutFileNameStates.c_str() );
+		remove( tmpOutFileNameLinks.c_str() );
+		remove( tmpOutFileNameContexts.c_str() );
+	}
 
 }
 
@@ -857,6 +939,39 @@ void StateNetwork::writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &write
 		}
 		else{
 			return;
+		}
+	}
+}
+
+void StateNetwork::writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line){
+
+	string buf;
+	istringstream ss;
+
+	while(getline(ifs_tmp,line)){
+		ss.clear();
+		ss.str(line);
+		ss >> buf;
+		if(writeMode == STATENODES){
+			int stateId = atoi(buf.c_str());
+			ss >> buf;
+			int physId = atoi(buf.c_str());
+	 		ss >> buf;
+	 		double outWeight = atof(buf.c_str());
+			ofs << completeStateNodeIdMapping[stateId] << " " << physId << " " << outWeight << "\n";
+		}
+		else if(writeMode == LINKS){
+			int source = atoi(buf.c_str());
+			ss >> buf;
+			int target = atoi(buf.c_str());
+			ss >> buf;
+			double linkWeight = atof(buf.c_str());
+			ofs << completeStateNodeIdMapping[source] << " " << completeStateNodeIdMapping[target] << " " << linkWeight << "\n";					
+		}
+		else if(writeMode == CONTEXTS){
+			int stateNodeId = atoi(buf.c_str());
+			string context = line.substr(buf.length()+1);
+			ofs << completeStateNodeIdMapping[stateNodeId] << " " << context << "\n";
 		}
 	}
 }
