@@ -27,22 +27,9 @@
 *.exe
 *.out
 *.app
-dangling-lumping
-
-merged_network_N10000_2007_3grams.net
-
-outteststatenet.net
-
-statenetwork.net
-
-nodangling-statenetwork.net
-
 wjs-kmedoids++-lumping
 
-km++-nodangling-statenetwork.net
+# Data files
+*.net
 
 wjs-kmedoids++-lumping.dSYM/Contents/Info.plist
-
-max2-samplestatenetwork.net
-
-samplestatenetwork.net
