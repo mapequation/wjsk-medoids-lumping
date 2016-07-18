@@ -13,7 +13,16 @@
 #include <unordered_map>
 #include <unordered_set>
 using namespace std;
+#include <limits>
 const double epsilon = 1e-15;
+
+// ofstream with higher precision to avoid truncation errors
+struct my_ofstream : std::ofstream {
+  explicit my_ofstream(std::streamsize prec = 15)
+  {
+    this->precision(prec);
+  }
+};
 
 enum WriteMode { STATENODES, LINKS, CONTEXTS };
 
@@ -24,25 +33,24 @@ inline std::string to_string (const T& t){
 	return ss.str();
 }
 
+struct pairhash {
+public:
+  template <typename T, typename U>
+  std::size_t operator()(const pair<T, U> &x) const
+  {
+    return x.first*31 + x.second;
+  }
+};
+
 // // Identical hashes for T,U and U,T, but that will never happen since T,U are ordered
 // struct pairhash {
 // public:
 //   template <typename T, typename U>
 //   std::size_t operator()(const pair<T, U> &x) const
 //   {
-//     return x.first*31 + x.second;
+//     return hash<T>()(x.first) ^ hash<U>()(x.second);
 //   }
 // };
-
-// Identical hashes for T,U and U,T, but that will never happen since T,U are ordered
-struct pairhash {
-public:
-  template <typename T, typename U>
-  std::size_t operator()(const pair<T, U> &x) const
-  {
-    return hash<T>()(x.first) ^ hash<U>()(x.second);
-  }
-};
 
 class LocalStateNode{
 public:
@@ -65,6 +73,7 @@ public:
 	StateNode();
 	StateNode(int stateid, int physid, double outweight);
 	int stateId;
+	int updatedStateId;
 	int physId;
 	double outWeight;
 	bool active = true;
@@ -113,12 +122,12 @@ private:
 	bool batchOutput = false;
 	mt19937 &mtRand;
 	ifstream ifs;
-  	string line = "First line";
-  	double totWeight = 0.0;
-  	int updatedStateId = 0;
+  string line = "First line";
+  double totWeight = 0.0;
+  int updatedStateId = 0;
 	double entropyRate = 0.0;
 	unordered_map<int,int> completeStateNodeIdMapping;
-  	int totNphysNodes = 0;
+  int totNphysNodes = 0;
 	int totNstateNodes = 0;
 	int totNlinks = 0;
 	int totNdanglings = 0;
@@ -244,7 +253,13 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 		}
 	}
 	double div = (w1+w2)*h12 - w1*h1 - w2*h2;
+
+	if(div < epsilon)
+		div = epsilon;
+
 	cachedWJSdiv[make_pair(stateIndex1,stateIndex2)] = div;
+
+
 	return div;
 }
 
@@ -268,30 +283,7 @@ double StateNetwork::calcEntropyRate(){
 
 }
 
-void StateNetwork::performLumping(vector<LocalStateNode> &localStateNodes){
 
-	int NPstateNodes = localStateNodes.size();
-	// Update stateNodes to reflect the lumping
-	for(int i=Nclu;i<NPstateNodes;i++){
-		// Only lump non-centers; first Nclu elements contain centers.
-
-		StateNode &lumpedStateNode = stateNodes[localStateNodes[i].minCenterStateId];
-		StateNode &lumpingStateNode = stateNodes[localStateNodes[i].stateId];
-		// Add context to lumped state node
-		lumpedStateNode.contexts.insert(lumpedStateNode.contexts.begin(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
-		// Add links to lumped state node
-		Nlinks  -= lumpedStateNode.links.size() + lumpingStateNode.links.size(); // To update the global number of links
-		for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++)
-			lumpedStateNode.links[link_it->first] += link_it->second;
-		Nlinks += lumpedStateNode.links.size(); // To update the global number of links
-		lumpedStateNode.outWeight += lumpingStateNode.outWeight;
-
-		// Update state id of lumping state node to point to lumped state node and make it inactive
-		lumpingStateNode.stateId = lumpedStateNode.stateId;
-		lumpingStateNode.active = false;
-	}
-
-}
 
 void StateNetwork::updateCenters(vector<LocalStateNode> &localStateNodes){
 
@@ -412,6 +404,46 @@ void StateNetwork::findCenters(vector<LocalStateNode> &localStateNodes){
 
 }
 
+void StateNetwork::performLumping(vector<LocalStateNode> &localStateNodes){
+
+	int NPstateNodes = localStateNodes.size();
+	// Update stateNodes to reflect the lumping
+
+	// // Validation
+	// unordered_set<int> c;
+	// for(int i=0;i<Nclu;i++)
+	// 	c.insert(localStateNodes[i].stateId);
+	// for(int i=Nclu;i<NPstateNodes;i++){
+	// 	unordered_set<int>::iterator it = c.find(localStateNodes[i].minCenterStateId);
+	// 	if(it == c.end())
+	// 		cout << ":::::::::+++++++ ERROR for pos " << i << " " << localStateNodes[i].minDiv << " " << localStateNodes[i].minCenterStateId << endl;
+	// }
+
+	for(int i=Nclu;i<NPstateNodes;i++){
+
+
+		// Only lump non-centers; first Nclu elements contain centers.
+
+		StateNode &lumpedStateNode = stateNodes[localStateNodes[i].minCenterStateId];
+		StateNode &lumpingStateNode = stateNodes[localStateNodes[i].stateId];
+		// Add context to lumped state node
+		lumpedStateNode.contexts.insert(lumpedStateNode.contexts.begin(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
+		// Add links to lumped state node
+		Nlinks  -= lumpedStateNode.links.size() + lumpingStateNode.links.size(); // To update the global number of links
+		for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++){
+			lumpedStateNode.links[link_it->first] += link_it->second;
+		}
+		Nlinks += lumpedStateNode.links.size(); // To update the global number of links
+
+		lumpedStateNode.outWeight += lumpingStateNode.outWeight;
+
+		// Update state id of lumping state node to point to lumped state node and make it inactive
+		lumpingStateNode.updatedStateId = lumpedStateNode.stateId;
+		lumpingStateNode.active = false;
+	}
+
+}
+
 void StateNetwork::lumpStateNodes(){
 
 	cout << "Lumping state nodes in each physical node:" << endl;
@@ -436,7 +468,7 @@ void StateNetwork::lumpStateNodes(){
 			// Initialize vector to store centers and stateId of closest center
 			findCenters(localStateNodes);
 
-			updateCenters(localStateNodes);
+			// updateCenters(localStateNodes);
 
 			// Free cached divergences
 			cachedWJSdiv = unordered_map<pair<int,int>,double,pairhash>();
@@ -447,6 +479,10 @@ void StateNetwork::lumpStateNodes(){
 			NstateNodes -= NPstateNodes - Nclu;
 
 		}
+		else if(NPstateNodes == 0){
+			NphysDanglings++;
+		}
+
 		Nprocessed++;
 		cout << "\r-->Lumped " << Nlumpings << " state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
 	}
@@ -458,6 +494,7 @@ void StateNetwork::lumpStateNodes(){
 		StateNode &stateNode = it->second;
 		if(stateNode.active){
 			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
+			stateNode.updatedStateId = updatedStateId;
 			updatedStateId++;
 		}
 	}
@@ -465,7 +502,7 @@ void StateNetwork::lumpStateNodes(){
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 		StateNode &stateNode = it->second;
 		if(!stateNode.active){
-			stateNodeIdMapping[stateNode.stateId] = stateNodeIdMapping[stateNodes[stateNode.stateId].stateId];
+			stateNodeIdMapping[stateNode.stateId] = stateNodeIdMapping[stateNode.updatedStateId];
 		}
 	}
 
@@ -583,7 +620,7 @@ bool StateNetwork::loadStateNetworkBatch(){
 		int target = atoi(buf.c_str());
 		ss >> buf;
 		double linkWeight = atof(buf.c_str());
-		stateNodes[source].links[target] = linkWeight;
+		stateNodes[source].links[target] += linkWeight;
 	}
  	cout << "done!" << endl;
 
@@ -599,6 +636,19 @@ bool StateNetwork::loadStateNetworkBatch(){
 	}
 	cout << "done!" << endl;
 
+	// // Validate out-weights
+ // 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+	// StateNode &stateNode = it->second;
+	// 	double w = 0.0;
+	// 	for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
+	// 		w += it_link->second;
+	// 	}
+	// 	if((w < (stateNode.outWeight-epsilon)) || (w > (stateNode.outWeight+epsilon))){
+	// 		cout << setprecision(15) << "::::::::::: Warning: out-weight does not match link weights for state node " << stateNode.stateId << ": " << stateNode.outWeight << " vs " << w << " " << stateNode.links.size() << ", updating. :::::::::::" << endl;
+	// 		stateNode.outWeight = w;
+	// 	}
+	// }
+
  	return true;
 
 }
@@ -608,7 +658,7 @@ void StateNetwork::printStateNetworkBatch(){
 
 	cout << "Writing temporary results:" << endl;
 
-  ofstream ofs;
+  my_ofstream ofs;
   if(batchOutput){
   	if(Nbatches == 1){ // Start with empty file for first batch
 			ofs.open(tmpOutFileName.c_str());
@@ -632,8 +682,11 @@ void StateNetwork::printStateNetworkBatch(){
 	cout << "-->Writing " << NstateNodes << " state nodes..." << flush;
 	// To order state nodes by id
 	map<int,int> orderedStateNodeIds;
-	for(unordered_map<int,int>::iterator it = stateNodeIdMapping.begin(); it != stateNodeIdMapping.end(); it++)
- 		orderedStateNodeIds[it->second] =	it->first;
+	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+		StateNode &stateNode = it->second;
+		if(stateNode.active)
+			orderedStateNodeIds[stateNode.updatedStateId] = stateNode.stateId;
+	}
 
 	for(map<int,int>::iterator it = orderedStateNodeIds.begin(); it != orderedStateNodeIds.end(); it++){
 		StateNode &stateNode = stateNodes[it->second];
@@ -655,12 +708,10 @@ void StateNetwork::printStateNetworkBatch(){
 		}
 	}
 	cout << "-->Writing " << Nlinks << " links..." << flush;
-	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
-		StateNode &stateNode = it->second;
-		if(stateNode.active){
-			for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
-					ofs << stateNode.stateId << " " << it_link->first << " " << it_link->second << "\n";
-			}
+	for(map<int,int>::iterator it = orderedStateNodeIds.begin(); it != orderedStateNodeIds.end(); it++){	
+		StateNode &stateNode = stateNodes[it->second];
+		for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
+				ofs << stateNode.stateId << " " << it_link->first << " " << it_link->second << "\n";
 		}
 	}
 	cout << "done!" << endl;
@@ -679,13 +730,10 @@ void StateNetwork::printStateNetworkBatch(){
 		}
 	}
 	cout << "-->Writing " << Ncontexts << " contexts..." << flush;
-	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
-		StateNode &stateNode = it->second;
-		if(stateNode.active){
-		// The state node has not been lumped to another node (but other nodes may have been lumped to it)
-			for(vector<string>::iterator it_context = stateNode.contexts.begin(); it_context != stateNode.contexts.end(); it_context++){
-				ofs << stateNode.stateId << " " << (*it_context) << "\n";
-			}
+	for(map<int,int>::iterator it = orderedStateNodeIds.begin(); it != orderedStateNodeIds.end(); it++){	
+		StateNode &stateNode = stateNodes[it->second];
+		for(vector<string>::iterator it_context = stateNode.contexts.begin(); it_context != stateNode.contexts.end(); it_context++){
+			ofs << stateNode.stateId << " " << (*it_context) << "\n";
 		}
 	}
 	cout << "done!" << endl;
@@ -696,7 +744,8 @@ void StateNetwork::printStateNetwork(){
 
 	entropyRate += calcEntropyRate();
 
-  ofstream ofs(outFileName.c_str());
+  my_ofstream ofs;
+  ofs.open(outFileName.c_str());
 
 	cout << "No more batches, writing results to " << outFileName << ":" << endl;
 	cout << "-->Writing header comments..." << flush;
@@ -706,14 +755,18 @@ void StateNetwork::printStateNetwork(){
   ofs << "# Number of links: " << Nlinks << "\n";
   ofs << "# Number of contexts: " << Ncontexts << "\n";
   ofs << "# Total weight: " << weight << "\n";
-  ofs << "# Entropy rate: " << entropyRate/totWeight << "\n";
+  ofs << "# Entropy rate: " << entropyRate/weight << "\n";
 	cout << "done!" << endl;
 
 	cout << "-->Writing " << NstateNodes << " state nodes..." << flush;
 	// To order state nodes by id
 	map<int,int> orderedStateNodeIds;
-	for(unordered_map<int,int>::iterator it = stateNodeIdMapping.begin(); it != stateNodeIdMapping.end(); it++)
- 		orderedStateNodeIds[it->second] =	it->first;
+	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+		StateNode &stateNode = it->second;
+		if(stateNode.active)
+			orderedStateNodeIds[stateNode.updatedStateId] = stateNode.stateId;
+	}
+
 	ofs << "*States\n";
 	ofs << "#stateId ==> (physicalId, outWeight)\n";
 	for(map<int,int>::iterator it = orderedStateNodeIds.begin(); it != orderedStateNodeIds.end(); it++){
@@ -725,12 +778,15 @@ void StateNetwork::printStateNetwork(){
 	cout << "-->Writing " << Nlinks << " links..." << flush;
 	ofs << "*Links\n";
 	ofs << "#(source target) ==> weight\n";
-	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
-		StateNode &stateNode = it->second;
-		if(stateNode.active){
-			for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
-					ofs << stateNodeIdMapping[stateNode.stateId] << " " << stateNodeIdMapping[it_link->first] << " " << it_link->second << "\n";
-			}
+	for(map<int,int>::iterator it = orderedStateNodeIds.begin(); it != orderedStateNodeIds.end(); it++){	
+		StateNode &stateNode = stateNodes[it->second];
+		int source = stateNodeIdMapping[stateNode.stateId];
+		// Remove link redundance from lumped targets
+		unordered_map<int,double> lumpedLinks;
+		for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++)
+			lumpedLinks[stateNodeIdMapping[it_link->first]] += it_link->second;
+		for(unordered_map<int,double>::iterator it_link = lumpedLinks.begin(); it_link != lumpedLinks.end(); it_link++){
+			ofs << source << " " << it_link->first << " " << it_link->second << "\n";
 		}
 	}
 	cout << "done!" << endl;
@@ -738,13 +794,10 @@ void StateNetwork::printStateNetwork(){
 	cout << "-->Writing " << Ncontexts << " contexts..." << flush;
 	ofs << "*Contexts \n";
 	ofs << "#stateId <== (physicalId priorId [history...])\n";
-	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
-		StateNode &stateNode = it->second;
-		if(stateNode.active){
-		// The state node has not been lumped to another node (but other nodes may have been lumped to it)
-			for(vector<string>::iterator it_context = stateNode.contexts.begin(); it_context != stateNode.contexts.end(); it_context++){
-				ofs << stateNodeIdMapping[stateNode.stateId] << " " << (*it_context) << "\n";
-			}
+	for(map<int,int>::iterator it = orderedStateNodeIds.begin(); it != orderedStateNodeIds.end(); it++){	
+		StateNode &stateNode = stateNodes[it->second];
+		for(vector<string>::iterator it_context = stateNode.contexts.begin(); it_context != stateNode.contexts.end(); it_context++){
+			ofs << stateNodeIdMapping[stateNode.stateId] << " " << (*it_context) << "\n";
 		}
 	}
 	cout << "done!" << endl;
@@ -784,7 +837,8 @@ void StateNetwork::concludeBatch(){
 void StateNetwork::compileBatches(){
 
 
-  ofstream ofs(outFileName);
+  my_ofstream ofs;
+  ofs.open(outFileName);
   string buf;
 	istringstream ss;
 	bool writeStates = false;
@@ -815,7 +869,12 @@ void StateNetwork::compileBatches(){
 			if(line[0] == '*'){
 				break;	
 			}
-			ofs << line << "\n";
+			else if(line[0] == '='){
+				ofs << "=== " << batchNr << "/" << Nbatches << " ===\n";
+			}
+			else{
+				ofs << line << "\n";
+			}
 		}
 		while(!ifs_tmp.eof()){
 	
@@ -887,7 +946,6 @@ void StateNetwork::compileBatches(){
 		ifs_tmp.close();
 		cout << "done!" << endl;
 
-
 		remove( tmpOutFileNameStates.c_str() );
 		remove( tmpOutFileNameLinks.c_str() );
 		remove( tmpOutFileNameContexts.c_str() );
@@ -930,7 +988,7 @@ void StateNetwork::writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &write
 			}
 			else{
 				if(line[0] == '='){
-					ofs << "=== " << batchNr << "/" << Nbatches << " ===\n";
+					ofs << "=== " << batchNr+1 << "/" << Nbatches << " ===\n";
 				}
 				else{
 					ofs << line << "\n";
