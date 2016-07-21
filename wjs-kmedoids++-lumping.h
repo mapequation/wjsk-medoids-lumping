@@ -958,6 +958,8 @@ void StateNetwork::writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &write
 	string buf;
 	istringstream ss;
 
+	unordered_map<pair<int,int>,double,pairhash> aggregatedLinks;
+
 	while(getline(ifs_tmp,line)){
 		if(line[0] != '*'){
 			if(line[0] != '=' && line[0] != '#'){
@@ -978,7 +980,8 @@ void StateNetwork::writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &write
 					int target = atoi(buf.c_str());
 					ss >> buf;
 					double linkWeight = atof(buf.c_str());
-					ofs << completeStateNodeIdMapping[source] << " " << completeStateNodeIdMapping[target] << " " << linkWeight << "\n";					
+					ofs << completeStateNodeIdMapping[source] << " " << completeStateNodeIdMapping[target] << " " << linkWeight << "\n";
+					aggregatedLinks[make_pair(source,target)] += linkWeight;				
 				}
 				else if(writeMode == CONTEXTS){
 					int stateNodeId = atoi(buf.c_str());
@@ -986,17 +989,21 @@ void StateNetwork::writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &write
 					ofs << completeStateNodeIdMapping[stateNodeId] << " " << context << "\n";
 				}
 			}
+			else if(line[0] == '='){
+				ofs << "=== " << batchNr+1 << "/" << Nbatches << " ===\n";
+			}
 			else{
-				if(line[0] == '='){
-					ofs << "=== " << batchNr+1 << "/" << Nbatches << " ===\n";
-				}
-				else{
-					ofs << line << "\n";
-				}
+				ofs << line << "\n";
 			}
 		}
 		else{
-			return;
+			break;
+		}
+	}
+
+	if(writeMode == LINKS ){
+		for(unordered_map<pair<int,int>,double,pairhash>::iterator link_it = aggregatedLinks.begin(); link_it != aggregatedLinks.end(); link_it++){
+			ofs << link_it->first.first << " " << link_it->first.second << " " << link_it->second << "\n";
 		}
 	}
 }
