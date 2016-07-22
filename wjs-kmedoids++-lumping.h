@@ -15,6 +15,7 @@
 using namespace std;
 #include <limits>
 const double epsilon = 1e-15;
+const double bignum = 1e15;
 
 // ofstream with higher precision to avoid truncation errors
 struct my_ofstream : std::ofstream {
@@ -57,7 +58,7 @@ public:
 	LocalStateNode();
 	LocalStateNode(int stateid);
 	int stateId;
-	double minDiv = 1.0;
+	double minDiv = bignum;
 	int minCenterStateId;
 };
 
@@ -124,6 +125,7 @@ private:
 	ifstream ifs;
   string line = "First line";
   double totWeight = 0.0;
+  double accumWeight = 0.0;
   int updatedStateId = 0;
 	double entropyRate = 0.0;
 	unordered_map<int,int> completeStateNodeIdMapping;
@@ -202,8 +204,8 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 	double ow1 = stateNodes[stateIndex1].outWeight;
 	double ow2 = stateNodes[stateIndex2].outWeight;
 	// Normalized weights over entire network
-	double w1 = ow1/weight;
-	double w2 = ow2/weight;
+	double w1 = ow1/totWeight;
+	double w2 = ow2/totWeight;
 	// Normalized weights over state nodes 1 and 2
 	double pi1 = w1 / (w1 + w2);
 	double pi2 = w2 / (w1 + w2);
@@ -275,7 +277,7 @@ double StateNetwork::calcEntropyRate(){
 				double p = it_link->second/stateNode.outWeight;
 				H -= p*log(p);
 			}
-			h += stateNode.outWeight*H/log(2.0);
+			h += stateNode.outWeight*H/totWeight/log(2.0);
 		}
 	}
 
@@ -298,7 +300,7 @@ void StateNetwork::updateCenters(vector<LocalStateNode> &localStateNodes){
 	for(unordered_map<int,vector<int> >::iterator it = medoids.begin(); it != medoids.end(); it++){
 		vector<int> &medoid = it->second;
 		int NstatesInMedoid = medoid.size();
-		double minDivSumInMedoid = 1.0;
+		double minDivSumInMedoid = bignum;
 		int minDivSumInMedoidIndex = medoid[0];
 		// Find total divergence for each state node in medoid
 		for(int j=0;j<NstatesInMedoid;j++){
@@ -315,7 +317,7 @@ void StateNetwork::updateCenters(vector<LocalStateNode> &localStateNodes){
 		}
 		// Update localStateNodes to have all minCenterStateId point to the global Id/Index and to keep centers within the first Nclu elements.
 		for(int j=0;j<NstatesInMedoid;j++){
-			localStateNodes[medoid[j]].minCenterStateId = localStateNodes[minDivSumInMedoidIndex].stateId;
+			localStateNodes[medoid[j]].minCenterStateId = localStateNodes[medoid[minDivSumInMedoidIndex]].stateId;
 		}
 		swap(localStateNodes[medoid[0]],localStateNodes[medoid[minDivSumInMedoidIndex]]); // Swap such that the first Nclu state nodes in localStateNodes are centers
 		swap(medoid[0],medoid[minDivSumInMedoidIndex]); // Swap such that the first index in medoid is center
@@ -326,7 +328,7 @@ void StateNetwork::updateCenters(vector<LocalStateNode> &localStateNodes){
 		vector<int> &medoid = it->second;
 		int NstatesInMedoid = medoid.size();
 		for(int j=1;j<NstatesInMedoid;j++){ // Start at 1 because first index in medoid is center
-			localStateNodes[medoid[j]].minDiv = 1.0;
+			localStateNodes[medoid[j]].minDiv = bignum;
 			for(int k=0;k<Nclu;k++){
 				double div = wJSdiv(localStateNodes[medoid[j]].stateId,localStateNodes[k].stateId);
 				if(div < localStateNodes[medoid[j]].minDiv){
@@ -345,7 +347,7 @@ void StateNetwork::findCenters(vector<LocalStateNode> &localStateNodes){
 
 	int NPstateNodes = localStateNodes.size();
 	int Ncenters = 0;
-	double sumMinDiv = 1.0*NPstateNodes; // Because minDiv is set to 1.0 for all state nodes
+	double sumMinDiv = bignum*NPstateNodes; // Because minDiv is set to bignum for all state nodes
 
 	// Find random state node in physical node as first center
 	std::uniform_int_distribution<int> randInt(0,NPstateNodes-1);
@@ -409,15 +411,15 @@ void StateNetwork::performLumping(vector<LocalStateNode> &localStateNodes){
 	int NPstateNodes = localStateNodes.size();
 	// Update stateNodes to reflect the lumping
 
-	// // Validation
-	// unordered_set<int> c;
-	// for(int i=0;i<Nclu;i++)
-	// 	c.insert(localStateNodes[i].stateId);
-	// for(int i=Nclu;i<NPstateNodes;i++){
-	// 	unordered_set<int>::iterator it = c.find(localStateNodes[i].minCenterStateId);
-	// 	if(it == c.end())
-	// 		cout << ":::::::::+++++++ ERROR for pos " << i << " " << localStateNodes[i].minDiv << " " << localStateNodes[i].minCenterStateId << endl;
-	// }
+	// Validation
+	unordered_set<int> c;
+	for(int i=0;i<Nclu;i++)
+		c.insert(localStateNodes[i].stateId);
+	for(int i=Nclu;i<NPstateNodes;i++){
+		unordered_set<int>::iterator it = c.find(localStateNodes[i].minCenterStateId);
+		if(it == c.end())
+			cout << ":::::::::+++++++ ERROR for pos " << i << " " << localStateNodes[i].minDiv << " " << localStateNodes[i].minCenterStateId << endl;
+	}
 
 	for(int i=Nclu;i<NPstateNodes;i++){
 
@@ -468,7 +470,7 @@ void StateNetwork::lumpStateNodes(){
 			// Initialize vector to store centers and stateId of closest center
 			findCenters(localStateNodes);
 
-			// updateCenters(localStateNodes);
+			updateCenters(localStateNodes);
 
 			// Free cached divergences
 			cachedWJSdiv = unordered_map<pair<int,int>,double,pairhash>();
@@ -542,6 +544,9 @@ bool StateNetwork::loadStateNetworkBatch(){
 			while(getline(ifs,line)){
 				if(line[0] == '*')
 					break;
+				size_t foundTotSize = line.find("# Total weight: ");
+				if(foundTotSize != string::npos)
+					totWeight = atof(line.substr(foundTotSize+16).c_str());
 			}
 		}
 	}
@@ -809,7 +814,7 @@ void StateNetwork::concludeBatch(){
 	cout << "Concluding batch:" << endl;
 
 	entropyRate += calcEntropyRate();
-	totWeight += weight;
+	accumWeight += weight;
 	totNphysNodes += NphysNodes;
 	totNstateNodes += NstateNodes;
 	totNlinks += Nlinks;
@@ -824,7 +829,7 @@ void StateNetwork::concludeBatch(){
 	Ncontexts = 0;
 	NphysDanglings = 0;
 
-	cout << "-->Current estimate of the entropy rate: " << entropyRate/totWeight << endl;
+	cout << "-->Current estimate of the entropy rate: " << entropyRate*totWeight/accumWeight << endl;
 
 	completeStateNodeIdMapping.insert(stateNodeIdMapping.begin(),stateNodeIdMapping.end());
 	stateNodeIdMapping.clear();
@@ -855,7 +860,7 @@ void StateNetwork::compileBatches(){
   ofs << "# Number of links: " << totNlinks << "\n";
   ofs << "# Number of contexts: " << totNcontexts << "\n";
   ofs << "# Total weight: " << totWeight << "\n";
-  ofs << "# Entropy rate: " << entropyRate/totWeight << "\n";
+  ofs << "# Entropy rate: " << entropyRate << "\n";
 	cout << "done!" << endl;
 
 	cout << "-->Relabeling and writing " << totNstateNodes << " state nodes, " << totNlinks << " links, and " << totNcontexts << " contexts:" << endl;
