@@ -747,7 +747,7 @@ void StateNetwork::printStateNetworkBatch(){
 
 void StateNetwork::printStateNetwork(){
 
-	entropyRate += calcEntropyRate();
+	entropyRate = calcEntropyRate();
 
   my_ofstream ofs;
   ofs.open(outFileName.c_str());
@@ -760,7 +760,7 @@ void StateNetwork::printStateNetwork(){
   ofs << "# Number of links: " << Nlinks << "\n";
   ofs << "# Number of contexts: " << Ncontexts << "\n";
   ofs << "# Total weight: " << weight << "\n";
-  ofs << "# Entropy rate: " << entropyRate/weight << "\n";
+  ofs << "# Entropy rate: " << entropyRate << "\n";
 	cout << "done!" << endl;
 
 	cout << "-->Writing " << NstateNodes << " state nodes..." << flush;
