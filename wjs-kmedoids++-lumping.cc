@@ -33,7 +33,7 @@ int main(int argc,char *argv[]){
 
   int argNr = 1;
   int Nclu = 100;
-  double batchOutput = false;
+  bool batchOutput = false;
   while(argNr < argc){
     if(to_string(argv[argNr]) == "-h"){
       cout << CALL_SYNTAX;
