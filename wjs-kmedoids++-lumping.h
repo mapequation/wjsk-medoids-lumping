@@ -19,8 +19,8 @@ const double bignum = 1.0;
 const double threshold = 1.0e-10;
 
 // ofstream with higher precision to avoid truncation errors
-struct my_ofstream : std::ofstream {
-  explicit my_ofstream(std::streamsize prec = 15)
+struct my_ofstream : ofstream {
+  explicit my_ofstream(streamsize prec = 15)
   {
     this->precision(prec);
   }
@@ -29,8 +29,8 @@ struct my_ofstream : std::ofstream {
 enum WriteMode { STATENODES, LINKS, CONTEXTS };
 
 template <class T>
-inline std::string to_string (const T& t){
-	std::stringstream ss;
+inline string to_string (const T& t){
+	stringstream ss;
 	ss << t;
 	return ss.str();
 }
@@ -38,7 +38,7 @@ inline std::string to_string (const T& t){
 struct pairhash {
 public:
   template <typename T, typename U>
-  std::size_t operator()(const pair<T, U> &x) const
+  size_t operator()(const pair<T, U> &x) const
   {
     return x.first*31 + x.second;
   }
@@ -48,7 +48,7 @@ public:
 // struct pairhash {
 // public:
 //   template <typename T, typename U>
-//   std::size_t operator()(const pair<T, U> &x) const
+//   size_t operator()(const pair<T, U> &x) const
 //   {
 //     return hash<T>()(x.first) ^ hash<U>()(x.second);
 //   }
@@ -152,7 +152,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string infilename,string outfilename,int nclu,bool batchoutput,std::mt19937 &mtrand);
+	StateNetwork(string infilename,string outfilename,int nclu,bool batchoutput,mt19937 &mtrand);
 	
 	void lumpStateNodes();
 	bool loadStateNetworkBatch();
@@ -166,7 +166,7 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string infilename,string outfilename,int nclu,bool batchoutput,std::mt19937 &mtrand) : mtRand(mtrand){
+StateNetwork::StateNetwork(string infilename,string outfilename,int nclu,bool batchoutput,mt19937 &mtrand) : mtRand(mtrand){
 	Nclu = nclu;
 	inFileName = infilename;
 	outFileName = outfilename;
@@ -356,7 +356,7 @@ double StateNetwork::findCenters(vector<LocalStateNode> &localStateNodes){
 	double sumMinDiv = bignum*NPstateNodes; // Because minDiv is set to bignum for all state nodes
 
 	// Find random state node in physical node as first center
-	std::uniform_int_distribution<int> randInt(0,NPstateNodes-1);
+	uniform_int_distribution<int> randInt(0,NPstateNodes-1);
 	int firstCenterIndex = randInt(mtRand);
 	localStateNodes[firstCenterIndex].minCenterStateId = localStateNodes[firstCenterIndex].stateId;
 	sumMinDiv -= localStateNodes[firstCenterIndex].minDiv;
@@ -379,7 +379,7 @@ double StateNetwork::findCenters(vector<LocalStateNode> &localStateNodes){
 			}
 		}
 		// Pick new center proportional to minimum divergence
-		std::uniform_int_distribution<double> randDouble(0.0,sumMinDiv);
+		uniform_real_distribution<double> randDouble(0.0,sumMinDiv);
 		double randMinDivSum = randDouble(mtRand);
 		double minDivSum = 0.0;
 		int newCenterIndex = Ncenters;
