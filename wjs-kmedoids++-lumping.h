@@ -122,6 +122,7 @@ private:
 	string tmpOutFileNameLinks;
 	string tmpOutFileNameContexts;
 	bool batchOutput = false;
+	bool fast = false;
 	mt19937 &mtRand;
 	ifstream ifs;
   string line = "First line";
@@ -152,7 +153,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string infilename,string outfilename,int nclu,bool batchoutput,mt19937 &mtrand);
+	StateNetwork(string inFileName,string outFileName,int Nclu,bool batchOutput,bool fast,mt19937 &mtRand);
 	
 	void lumpStateNodes();
 	bool loadStateNetworkBatch();
@@ -166,16 +167,17 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string infilename,string outfilename,int nclu,bool batchoutput,mt19937 &mtrand) : mtRand(mtrand){
-	Nclu = nclu;
-	inFileName = infilename;
-	outFileName = outfilename;
-	tmpOutFileName = string(outFileName).append("_tmp");
-	tmpOutFileNameStates = string(outFileName).append("_tmpstates");
-	tmpOutFileNameLinks = string(outFileName).append("_tmplinks");
-	tmpOutFileNameContexts = string(outFileName).append("_tmpcontexts");
-	mtRand = mtrand;
-	batchOutput = batchoutput;
+StateNetwork::StateNetwork(string inFileName,string outFileName,int Nclu,bool batchOutput,bool fast,mt19937 &mtRand) : mtRand(mtRand){
+	this->Nclu = Nclu;
+	this->inFileName = inFileName;
+	this->outFileName = outFileName;
+	this->tmpOutFileName = string(outFileName).append("_tmp");
+	this->tmpOutFileNameStates = string(outFileName).append("_tmpstates");
+	this->tmpOutFileNameLinks = string(outFileName).append("_tmplinks");
+	this->tmpOutFileNameContexts = string(outFileName).append("_tmpcontexts");
+	this->mtRand = mtRand;
+	this->batchOutput = batchOutput;
+	this->fast = fast;
 
 	// Open state network
 	ifs.open(inFileName.c_str());
@@ -479,12 +481,14 @@ void StateNetwork::lumpStateNodes(){
 			double oldSumMinDiff = 0.0;
 			double sumMinDiv = findCenters(localStateNodes);
 
-			// Update centers as long as total distance to median changes more than threshold
+			// If not fast flag: Update centers as long as total distance to median changes more than threshold
 			int Nupdates = 0;
-			while( (fabs(sumMinDiv-oldSumMinDiff) > threshold) && (Nupdates < 10) ){
-				swap(oldSumMinDiff,sumMinDiv);
-				sumMinDiv = updateCenters(localStateNodes);
-				Nupdates++;
+			if(!fast){
+				while( (fabs(sumMinDiv-oldSumMinDiff) > threshold) && (Nupdates < 10) ){
+					swap(oldSumMinDiff,sumMinDiv);
+					sumMinDiv = updateCenters(localStateNodes);
+					Nupdates++;
+				}
 			}
 
 			// Free cached divergences
