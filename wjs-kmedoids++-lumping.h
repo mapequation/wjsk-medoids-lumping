@@ -147,7 +147,7 @@ private:
 	int Ncontexts = 0;
 	int NphysDanglings = 0;
 	int Nclu;
-	unordered_map<pair<int,int>,double,pairhash> cachedWJSdiv;
+	// unordered_map<pair<int,int>,double,pairhash> cachedWJSdiv;
 	unordered_map<int,int> stateNodeIdMapping;
 	unordered_map<int,PhysNode> physNodes;
 	unordered_map<int,StateNode> stateNodes;
@@ -193,19 +193,24 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 	double h2 = 0.0; // The entropy rate of the second state node
 	double h12 = 0.0; // The entropy rate of the lumped state node
 
-	if(stateIndex1 == stateIndex2)
+	if(stateIndex1 == stateIndex2){
 		return 0.0;
-
-	if(stateIndex1 > stateIndex2) // Swap to make stateIndex1 lowest 
+	}
+	else if(stateIndex1 > stateIndex2){ // Swap to make stateIndex1 lowest 
 		swap(stateIndex1,stateIndex2);
+	}
 
-	unordered_map<pair<int,int>,double,pairhash>::iterator wJSdiv_it = cachedWJSdiv.find(make_pair(stateIndex1,stateIndex2));
-	if(wJSdiv_it != cachedWJSdiv.end())
-		return wJSdiv_it->second;
+	// Cached values
+	// unordered_map<pair<int,int>,double,pairhash>::iterator wJSdiv_it = cachedWJSdiv.find(make_pair(stateIndex1,stateIndex2));
+	// if(wJSdiv_it != cachedWJSdiv.end())
+	// 	return wJSdiv_it->second;
+
+	StateNode &stateNode1 = stateNodes[stateIndex1];
+	StateNode &stateNode2 = stateNodes[stateIndex2];
 
 	// The out-link weights of the state nodes
-	double ow1 = stateNodes[stateIndex1].outWeight;
-	double ow2 = stateNodes[stateIndex2].outWeight;
+	double ow1 = stateNode1.outWeight;
+	double ow2 = stateNode2.outWeight;
 	// Normalized weights over entire network
 	double w1 = ow1/totWeight;
 	double w2 = ow2/totWeight;
@@ -217,10 +222,10 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 		return 0.0;
 	}
 
-	map<int,double>::iterator links1 = stateNodes[stateIndex1].links.begin();
-	map<int,double>::iterator links2 = stateNodes[stateIndex2].links.begin();
-	map<int,double>::iterator links1end = stateNodes[stateIndex1].links.end();
-	map<int,double>::iterator links2end = stateNodes[stateIndex2].links.end();
+	map<int,double>::iterator links1 = stateNode1.links.begin();
+	map<int,double>::iterator links2 = stateNode2.links.begin();
+	map<int,double>::iterator links1end = stateNode1.links.end();
+	map<int,double>::iterator links2end = stateNode2.links.end();
 	
 	while(links1 != links1end || links2 != links2end){
 
@@ -262,7 +267,8 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 	if(div < epsilon)
 		div = epsilon;
 
-	cachedWJSdiv[make_pair(stateIndex1,stateIndex2)] = div;
+	// Cached values
+	// cachedWJSdiv[make_pair(stateIndex1,stateIndex2)] = div;
 
 
 	return div;
@@ -460,14 +466,16 @@ void StateNetwork::lumpStateNodes(){
 
 	cout << "Lumping state nodes in each physical node:" << endl;
 
-	int Nlumpings = 0;
+	int NtotLumped = 0;
 	int Nprocessed = 0;
+	int NmaxLumped = 0;
 
 	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
 
 		PhysNode &physNode = phys_it->second;
 		int NPstateNodes = physNode.stateNodeIndices.size();
 		
+
 		if(NPstateNodes > Nclu){
 
 			// Initialize vector with state nodes in physical node with minimum necessary information
@@ -492,11 +500,13 @@ void StateNetwork::lumpStateNodes(){
 			}
 
 			// Free cached divergences
-			cachedWJSdiv = unordered_map<pair<int,int>,double,pairhash>();
+			// cachedWJSdiv = unordered_map<pair<int,int>,double,pairhash>();
 
 			// Perform the lumping and update stateNodes
 			performLumping(localStateNodes);
-			Nlumpings += NPstateNodes - Nclu;
+			if(NPstateNodes - Nclu > NmaxLumped)
+			NmaxLumped = NPstateNodes - Nclu;
+			NtotLumped += NPstateNodes - Nclu;
 			NstateNodes -= NPstateNodes - Nclu;
 
 		}
@@ -505,7 +515,7 @@ void StateNetwork::lumpStateNodes(){
 		}
 
 		Nprocessed++;
-		cout << "\r-->Lumped " << Nlumpings << " state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
+		cout << "\r-->Lumped " << NtotLumped << " (max " << NmaxLumped << ") state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
 	}
 	cout << endl << "-->Updating state node ids" << endl;
 
@@ -854,7 +864,7 @@ void StateNetwork::concludeBatch(){
 	stateNodeIdMapping.clear();
 	physNodes.clear();
 	stateNodes.clear();
-	cachedWJSdiv.clear();
+	// cachedWJSdiv.clear();
 
 }
 

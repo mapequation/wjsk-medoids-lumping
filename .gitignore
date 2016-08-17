@@ -32,4 +32,5 @@ wjs-kmedoids++-lumping
 # Data files
 *.net
 
-wjs-kmedoids++-lumping.dSYM/Contents/Info.plist
+wjs-kmedoids++-lumping.dSYM
+profile
