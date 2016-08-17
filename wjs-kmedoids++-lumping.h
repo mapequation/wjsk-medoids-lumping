@@ -466,15 +466,14 @@ void StateNetwork::lumpStateNodes(){
 
 	cout << "Lumping state nodes in each physical node:" << endl;
 
-	int NtotLumped = 0;
+	int Nlumpings = 0;
+	int NmaxLumpings = 0;
 	int Nprocessed = 0;
-	int NmaxLumped = 0;
 
 	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
 
 		PhysNode &physNode = phys_it->second;
 		int NPstateNodes = physNode.stateNodeIndices.size();
-		
 
 		if(NPstateNodes > Nclu){
 
@@ -504,9 +503,9 @@ void StateNetwork::lumpStateNodes(){
 
 			// Perform the lumping and update stateNodes
 			performLumping(localStateNodes);
-			if(NPstateNodes - Nclu > NmaxLumped)
-			NmaxLumped = NPstateNodes - Nclu;
-			NtotLumped += NPstateNodes - Nclu;
+			if(NmaxLumpings < NPstateNodes - Nclu)
+				NmaxLumpings = NPstateNodes - Nclu;
+			Nlumpings += NPstateNodes - Nclu;
 			NstateNodes -= NPstateNodes - Nclu;
 
 		}
@@ -515,7 +514,7 @@ void StateNetwork::lumpStateNodes(){
 		}
 
 		Nprocessed++;
-		cout << "\r-->Lumped " << NtotLumped << " (max " << NmaxLumped << ") state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
+		cout << "\r-->Lumped " << Nlumpings << " (max per node " << NmaxLumpings << ") state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
 	}
 	cout << endl << "-->Updating state node ids" << endl;
 
