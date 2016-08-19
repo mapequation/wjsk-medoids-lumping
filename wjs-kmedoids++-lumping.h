@@ -227,9 +227,11 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 	map<int,double>::iterator links1end = stateNode1.links.end();
 	map<int,double>::iterator links2end = stateNode2.links.end();
 	
-	while(links1 != links1end || links2 != links2end){
+	while(links1 != links1end && links2 != links2end){
 
-		if((links1 != links1end && links2 == links2end) || ((links1 != links1end && links2 != links2end) && (links1->first < links2->first))){
+		int diff = links1->first - links2->first;
+
+		if(diff < 0){
 		// If the first state node has a link that the second has not
 
 			double p1 = links1->second/ow1;
@@ -239,7 +241,7 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 			links1++;
 
 		}
-		else if((links2 != links2end && links1 == links1end) || ((links1 != links1end && links2 != links2end) && (links2->first < links1->first))){
+		else if(diff > 0){
 		// If the second state node has a link that the second has not
 
 			double p2 = links2->second/ow2;
@@ -262,6 +264,31 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 
 		}
 	}
+
+	while(links1 != links1end){
+		// If the first state node has a link that the second has not
+
+		double p1 = links1->second/ow1;
+		h1 -= p1*log(p1);
+		double p12 = pi1*links1->second/ow1;
+		h12 -= p12*log(p12);
+		links1++;
+
+	}
+
+	while(links2 != links2end){
+		// If the second state node has a link that the second has not
+
+		double p2 = links2->second/ow2;
+		h2 -= p2*log(p2);
+		double p12 = pi2*links2->second/ow2;
+		h12 -= p12*log(p12);
+		links2++;
+
+	}
+
+
+
 	double div = (w1+w2)*h12 - w1*h1 - w2*h2;
 
 	if(div < epsilon)
@@ -273,6 +300,95 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 
 	return div;
 }
+
+// double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
+
+// 	double h1 = 0.0; // The entropy rate of the first state node
+// 	double h2 = 0.0; // The entropy rate of the second state node
+// 	double h12 = 0.0; // The entropy rate of the lumped state node
+
+// 	if(stateIndex1 == stateIndex2){
+// 		return 0.0;
+// 	}
+// 	else if(stateIndex1 > stateIndex2){ // Swap to make stateIndex1 lowest 
+// 		swap(stateIndex1,stateIndex2);
+// 	}
+
+// 	// Cached values
+// 	// unordered_map<pair<int,int>,double,pairhash>::iterator wJSdiv_it = cachedWJSdiv.find(make_pair(stateIndex1,stateIndex2));
+// 	// if(wJSdiv_it != cachedWJSdiv.end())
+// 	// 	return wJSdiv_it->second;
+
+// 	StateNode &stateNode1 = stateNodes[stateIndex1];
+// 	StateNode &stateNode2 = stateNodes[stateIndex2];
+
+// 	// The out-link weights of the state nodes
+// 	double ow1 = stateNode1.outWeight;
+// 	double ow2 = stateNode2.outWeight;
+// 	// Normalized weights over entire network
+// 	double w1 = ow1/totWeight;
+// 	double w2 = ow2/totWeight;
+// 	// Normalized weights over state nodes 1 and 2
+// 	double pi1 = w1 / (w1 + w2);
+// 	double pi2 = w2 / (w1 + w2);
+
+// 	if(ow1 < epsilon || ow2 < epsilon){ // If one or both state nodes are dangling
+// 		return 0.0;
+// 	}
+
+// 	map<int,double>::iterator links1 = stateNode1.links.begin();
+// 	map<int,double>::iterator links2 = stateNode2.links.begin();
+// 	map<int,double>::iterator links1end = stateNode1.links.end();
+// 	map<int,double>::iterator links2end = stateNode2.links.end();
+	
+// 	while(links1 != links1end || links2 != links2end){
+
+// 		if((links1 != links1end && links2 == links2end) || ((links1 != links1end && links2 != links2end) && (links1->first < links2->first))){
+// 		// If the first state node has a link that the second has not
+
+// 			double p1 = links1->second/ow1;
+// 			h1 -= p1*log(p1);
+// 			double p12 = pi1*links1->second/ow1;
+// 			h12 -= p12*log(p12);
+// 			links1++;
+
+// 		}
+// 		else if((links2 != links2end && links1 == links1end) || ((links1 != links1end && links2 != links2end) && (links2->first < links1->first))){
+// 		// If the second state node has a link that the second has not
+
+// 			double p2 = links2->second/ow2;
+// 			h2 -= p2*log(p2);
+// 			double p12 = pi2*links2->second/ow2;
+// 			h12 -= p12*log(p12);
+// 			links2++;
+
+// 		}
+// 		else{ // If both state nodes have the link
+
+// 			double p1 = links1->second/ow1;
+// 			h1 -= p1*log(p1);
+// 			double p2 = links2->second/ow2;
+// 			h2 -= p2*log(p2);
+// 			double p12 = pi1*links1->second/ow1 + pi2*links2->second/ow2;
+// 			h12 -= p12*log(p12);
+// 			links1++;
+// 			links2++;
+
+// 		}
+// 	}
+// 	double div = (w1+w2)*h12 - w1*h1 - w2*h2;
+
+// 	if(div < epsilon)
+// 		div = epsilon;
+
+// 	// Cached values
+// 	// cachedWJSdiv[make_pair(stateIndex1,stateIndex2)] = div;
+
+
+// 	return div;
+// }
+
+
 
 double StateNetwork::calcEntropyRate(){
 
