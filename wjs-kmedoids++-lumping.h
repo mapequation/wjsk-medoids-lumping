@@ -10,6 +10,7 @@
 #include <random>
 #include <functional>
 #include <map>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 using namespace std;
@@ -107,7 +108,7 @@ class StateNetwork{
 private:
 	double calcEntropyRate();
 	double wJSdiv(int stateId1, int stateId2);
-	double findCenters(unordered_map<int,vector<LocalStateNode> > &medoids);
+	tuple<double,int,int> findCenters(unordered_map<int,vector<LocalStateNode> > &medoids);
 	double updateCenters(unordered_map<int,vector<LocalStateNode> > &medoids);
 	void performLumping(unordered_map<int,vector<LocalStateNode> > &medoids);
 	bool readLines(string &line,vector<string> &lines);
@@ -146,6 +147,9 @@ private:
 	int Ndanglings = 0;
 	int Ncontexts = 0;
 	int NphysDanglings = 0;
+	int NfinalClu;
+	int Nlevels;
+	vector<int> NcluVec;
 	int Nclu;
 	// unordered_map<pair<int,int>,double,pairhash> cachedWJSdiv;
 	unordered_map<int,int> stateNodeIdMapping;
@@ -153,7 +157,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,int Nclu,bool batchOutput,bool fast,mt19937 &mtRand);
+	StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> NcluVec,bool batchOutput,bool fast,mt19937 &mtRand);
 	
 	void lumpStateNodes();
 	bool loadStateNetworkBatch();
@@ -167,15 +171,16 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,int Nclu,bool batchOutput,bool fast,mt19937 &mtRand) : mtRand(mtRand){
-	this->Nclu = Nclu;
+StateNetwork::StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> NcluVec,bool batchOutput,bool fast,mt19937 &mtRand) : mtRand(mtRand){
+	this->NfinalClu = NfinalClu;
+	this->Nlevels = Nlevels;
+	Nclu = NcluVec[0];
 	this->inFileName = inFileName;
 	this->outFileName = outFileName;
 	this->tmpOutFileName = string(outFileName).append("_tmp");
 	this->tmpOutFileNameStates = string(outFileName).append("_tmpstates");
 	this->tmpOutFileNameLinks = string(outFileName).append("_tmplinks");
 	this->tmpOutFileNameContexts = string(outFileName).append("_tmpcontexts");
-	this->mtRand = mtRand;
 	this->batchOutput = batchOutput;
 	this->fast = fast;
 
@@ -393,7 +398,7 @@ double StateNetwork::updateCenters(unordered_map<int,vector<LocalStateNode> > &m
 
 }
 
-double StateNetwork::findCenters(unordered_map<int,vector<LocalStateNode> > &medoids){
+tuple<double,int,int> StateNetwork::findCenters(unordered_map<int,vector<LocalStateNode> > &medoids){
 	// Modifies the order of medoid(s) such thar the fist Nclu will be the centers.
 	// Also, all elements will contain the stateId it is closest to.
 
@@ -404,23 +409,64 @@ double StateNetwork::findCenters(unordered_map<int,vector<LocalStateNode> > &med
 	for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids.begin(); medoid_it != medoids.end(); medoid_it++){
 
 		vector<LocalStateNode> &medoid = medoid_it->second;
-
 		int NstatesInMedoid = medoid.size();
-		double minDivSumInMedoid = bignum*NstatesInMedoid; // Because minDiv is set to bignum for all state nodes
-		int Ncenters = 0;
+
+		if(NstatesInMedoid <= Nclu){
+			// All state nodes in medoid form their own medoids in the updated medoids
+			for(int i=0;i<NstatesInMedoid;i++){
+				medoid[i].minCenterStateId = medoid[i].stateId;
+			}
+
+		}
+		else{
+			// Find Nclu < NstatesInMedoid new centers in updated medoids
+
+			double minDivSumInMedoid = bignum*NstatesInMedoid; // Because minDiv is set to bignum for all state nodes
+			int Ncenters = 0;
+			
+			// Find random state node in physical node as first center
+			uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
+			int firstCenterIndex = randInt(mtRand);
+			medoid[firstCenterIndex].minCenterStateId = medoid[firstCenterIndex].stateId;
+			minDivSumInMedoid -= medoid[firstCenterIndex].minDiv;
+			// Put the center in first non-center position (Ncenters = 0) by swapping elements
+			swap(medoid[Ncenters],medoid[firstCenterIndex]);
+			Ncenters++;
 		
-		// Find random state node in physical node as first center
-		uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
-		int firstCenterIndex = randInt(mtRand);
-		medoid[firstCenterIndex].minCenterStateId = medoid[firstCenterIndex].stateId;
-		minDivSumInMedoid -= medoid[firstCenterIndex].minDiv;
-		// Put the center in first non-center position (Ncenters = 0) by swapping elements
-		swap(medoid[Ncenters],medoid[firstCenterIndex]);
-		Ncenters++;
-	
-	
-		// Find Nclu-1 more centers based on the k++ algorithm
-		while(Ncenters < Nclu){
+		
+			// Find Nclu-1 more centers based on the k++ algorithm
+			while(Ncenters < Nclu){
+				int lastClusterId = medoid[Ncenters-1].stateId;
+				for(int i=Ncenters;i<NstatesInMedoid;i++){
+					double div = wJSdiv(medoid[i].stateId,lastClusterId);
+					if(div < medoid[i].minDiv){
+						// Found new minimum divergence to center
+						minDivSumInMedoid -= medoid[i].minDiv;
+						minDivSumInMedoid += div;
+						medoid[i].minDiv = div;
+						medoid[i].minCenterStateId = lastClusterId;
+					}
+				}
+				// Pick new center proportional to minimum divergence
+				uniform_real_distribution<double> randDouble(0.0,minDivSumInMedoid);
+				double randMinDivSum = randDouble(mtRand);
+				double minDivSum = 0.0;
+				int newCenterIndex = Ncenters;
+				for(int i=Ncenters;i<NstatesInMedoid;i++){
+					minDivSum += medoid[i].minDiv;
+					if(minDivSum > randMinDivSum){
+						newCenterIndex = i;
+						break;
+					}
+				}
+				medoid[newCenterIndex].minCenterStateId = medoid[newCenterIndex].stateId;
+				minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
+				// Put the center in first non-center position by swapping elements
+				swap(medoid[Ncenters],medoid[newCenterIndex]);
+				Ncenters++;
+			}
+		
+			// Check if last center gives minimum divergence for some state nodes
 			int lastClusterId = medoid[Ncenters-1].stateId;
 			for(int i=Ncenters;i<NstatesInMedoid;i++){
 				double div = wJSdiv(medoid[i].stateId,lastClusterId);
@@ -431,46 +477,28 @@ double StateNetwork::findCenters(unordered_map<int,vector<LocalStateNode> > &med
 					medoid[i].minDiv = div;
 					medoid[i].minCenterStateId = lastClusterId;
 				}
+				
 			}
-			// Pick new center proportional to minimum divergence
-			uniform_real_distribution<double> randDouble(0.0,minDivSumInMedoid);
-			double randMinDivSum = randDouble(mtRand);
-			double minDivSum = 0.0;
-			int newCenterIndex = Ncenters;
-			for(int i=Ncenters;i<NstatesInMedoid;i++){
-				minDivSum += medoid[i].minDiv;
-				if(minDivSum > randMinDivSum){
-					newCenterIndex = i;
-					break;
-				}
-			}
-			medoid[newCenterIndex].minCenterStateId = medoid[newCenterIndex].stateId;
-			minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
-			// Put the center in first non-center position by swapping elements
-			swap(medoid[Ncenters],medoid[newCenterIndex]);
-			Ncenters++;
-		}
 	
-		// Check if last center gives minimum divergence for some state nodes
-		int lastClusterId = medoid[Ncenters-1].stateId;
-		for(int i=Ncenters;i<NstatesInMedoid;i++){
-			double div = wJSdiv(medoid[i].stateId,lastClusterId);
-			if(div < medoid[i].minDiv){
-				// Found new minimum divergence to center
-				minDivSumInMedoid -= medoid[i].minDiv;
-				minDivSumInMedoid += div;
-				medoid[i].minDiv = div;
-				medoid[i].minCenterStateId = lastClusterId;
-			}
-		}
+			sumMinDiv += minDivSumInMedoid;
 
-		for(int i=0;i<NstatesInMedoid;i++){
-			updatedMedoids[medoid[i].minCenterStateId].push_back(medoid[i]);
 		}
-
-		sumMinDiv += minDivSumInMedoid;
 
   }
+
+  int maxNstatesInMedoid = 0;
+  for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids.begin(); medoid_it != medoids.end(); medoid_it++){
+		vector<LocalStateNode> &medoid = medoid_it->second;
+		int NstatesInMedoid = medoid.size();
+		if(NstatesInMedoid > maxNstatesInMedoid)
+			maxNstatesInMedoid = NstatesInMedoid;
+
+		for(int i=0;i<NstatesInMedoid;i++){
+			medoid[i].minDiv = bignum; // Reset for next iteration
+			updatedMedoids[medoid[i].minCenterStateId].push_back(medoid[i]);
+		}
+  }
+
 
   swap(updatedMedoids,medoids);
 
@@ -486,7 +514,7 @@ double StateNetwork::findCenters(unordered_map<int,vector<LocalStateNode> > &med
   // }
 
 
-	return sumMinDiv;
+	return make_tuple(sumMinDiv,medoids.size(),maxNstatesInMedoid);
 
 }
 
@@ -534,7 +562,7 @@ void StateNetwork::performLumping(unordered_map<int,vector<LocalStateNode> > &me
 		}
 
 	}
-	
+
 }
 
 void StateNetwork::lumpStateNodes(){
@@ -542,15 +570,16 @@ void StateNetwork::lumpStateNodes(){
 	cout << "Lumping state nodes in each physical node:" << endl;
 
 	int Nlumpings = 0;
-	int NmaxLumpings = 0;
 	int Nprocessed = 0;
 
 	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
 
 		PhysNode &physNode = phys_it->second;
 		int NPstateNodes = physNode.stateNodeIndices.size();
+		int Nmedoids = NPstateNodes;
+		int maxNstatesInMedoid = 1;
 
-		if(NPstateNodes > Nclu){
+		if(NPstateNodes > NfinalClu){
 
 			// Initialize vector of vectors with state nodes in physical node with minimum necessary information
 			// The first Nclu elements will be centers
@@ -563,7 +592,12 @@ void StateNetwork::lumpStateNodes(){
 
 			// Initialize vector to store centers and stateId of closest center
 			double oldSumMinDiff = 0.0;
-			double sumMinDiv = findCenters(medoids);
+			double sumMinDiv;
+			for(int i=0;i<Nlevels;i++){
+				Nclu = NcluVec[i];
+				// Each iteration increases the number of medoids multiplicatively
+				tie(sumMinDiv,Nmedoids,maxNstatesInMedoid) = findCenters(medoids);
+			}
 
 			// If not fast flag: Update centers as long as total distance to median changes more than threshold
 			int Nupdates = 0;
@@ -580,10 +614,8 @@ void StateNetwork::lumpStateNodes(){
 
 			// Perform the lumping and update stateNodes
 			performLumping(medoids);
-			if(NmaxLumpings < NPstateNodes - Nclu)
-				NmaxLumpings = NPstateNodes - Nclu;
-			Nlumpings += NPstateNodes - Nclu;
-			NstateNodes -= NPstateNodes - Nclu;
+			Nlumpings += NPstateNodes - Nmedoids;
+			NstateNodes -= NPstateNodes - Nmedoids;
 
 		}
 		else if(NPstateNodes == 0){
@@ -591,7 +623,7 @@ void StateNetwork::lumpStateNodes(){
 		}
 
 		Nprocessed++;
-		cout << "\r-->Lumped " << Nlumpings << " (max per node " << NmaxLumpings << ") state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
+		cout << "\r-->Lumped " << Nlumpings << " (max states in medoid " << maxNstatesInMedoid << ") state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
 	}
 	cout << endl << "-->Updating state node ids" << endl;
 
