@@ -157,7 +157,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> NcluVec,bool batchOutput,bool fast,mt19937 &mtRand);
+	StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> &NcluVec,bool batchOutput,bool fast,mt19937 &mtRand);
 	
 	void lumpStateNodes();
 	bool loadStateNetworkBatch();
@@ -171,9 +171,10 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> NcluVec,bool batchOutput,bool fast,mt19937 &mtRand) : mtRand(mtRand){
+StateNetwork::StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> &NcluVec,bool batchOutput,bool fast,mt19937 &mtRand) : mtRand(mtRand), NcluVec(NcluVec){
 	this->NfinalClu = NfinalClu;
 	this->Nlevels = Nlevels;
+	this->NcluVec = NcluVec;
 	Nclu = NcluVec[0];
 	this->inFileName = inFileName;
 	this->outFileName = outFileName;
