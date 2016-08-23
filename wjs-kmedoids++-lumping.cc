@@ -20,7 +20,7 @@ int main(int argc,char *argv[]){
   cout << endl;
 
   // Parse command input
-  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] -k <number of clusters> -l <number of hierarchical levels> --batchoutput --fast input_state_network.net output_state_network.net\n";
+  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] -k <number of clusters> -l <number of hierarchical levels> --batchoutput --num-update-states <number of random state nodes in medoid update> input_state_network.net output_state_network.net\n";
   if( argc == 1 ){
     cout << CALL_SYNTAX;
     exit(-1);
@@ -35,7 +35,7 @@ int main(int argc,char *argv[]){
   int Nlevels = 1;
   int NfinalClu = 100;
   bool batchOutput = false;
-  bool fast = false;
+  int NrandStates = -1;
   while(argNr < argc){
     if(to_string(argv[argNr]) == "-h"){
       cout << CALL_SYNTAX;
@@ -50,8 +50,9 @@ int main(int argc,char *argv[]){
       batchOutput = true;
       argNr++;
     }
-    else if(to_string(argv[argNr]) == "--fast"){
-      fast = true;
+    else if(to_string(argv[argNr]) == "--num-update-states"){
+      argNr++;
+      NrandStates = atoi(argv[argNr]);
       argNr++;
     }
     else if(to_string(argv[argNr]) == "-k"){
@@ -97,12 +98,18 @@ int main(int argc,char *argv[]){
     NcluVec[Nlevels-i] = multiplier;
   }
   cout << "(" << actualNfinalClu << ")" << endl;
+  if(NrandStates < 0)
+    cout << "-->Will use all random state nodes in medoid update (slowest)." << endl;
+  else if(NrandStates == 0)
+    cout << "-->Will not iteratively update medoids for better accuracy (fastest)." << endl;
+  else
+    cout << "-->Will sample number of random state nodes in medoid update: " << NrandStates << endl;
   cout << "-->Will read state network from file: " << inFileName << endl;
   cout << "-->Will write processed state network to file: " << outFileName << endl;
 
   mt19937 mtRand(seed);
 
-  StateNetwork statenetwork(inFileName,outFileName,NfinalClu,Nlevels,NcluVec,batchOutput,fast,mtRand);
+  StateNetwork statenetwork(inFileName,outFileName,NfinalClu,Nlevels,NcluVec,batchOutput,NrandStates,mtRand);
 
   while(statenetwork.loadStateNetworkBatch()){
     statenetwork.lumpStateNodes();
