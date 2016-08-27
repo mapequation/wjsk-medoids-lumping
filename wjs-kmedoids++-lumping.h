@@ -13,6 +13,10 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#ifdef _OPENMP
+#include <omp.h>
+#include <stdio.h>
+#endif
 using namespace std;
 #include <limits>
 const double epsilon = 1.0e-15;
@@ -710,70 +714,93 @@ void StateNetwork::performLumping(unordered_map<int,vector<LocalStateNode> > &me
 
 void StateNetwork::lumpStateNodes(){
 
-	cout << "Lumping state nodes in each physical node:" << endl;
+	cout << "Lumping state nodes in each physical node";
+	#ifdef _OPENMP
+	cout << ", using " << omp_get_max_threads() << " threds using " << _OPENMP << ":" << endl;
+	#else
+	cout << ", using a single thread:" << endl;
+	#endif
 
 	int Nlumpings = 0;
 	int Nprocessed = 0;
 
-	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
+	// To be able to parallelize loop over physical nodes
+	vector<PhysNode*> physNodeVec;
+	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++)
+		physNodeVec.push_back(&phys_it->second);
 
-		PhysNode &physNode = phys_it->second;
-		int NPstateNodes = physNode.stateNodeIndices.size();
-		int Nmedoids = NPstateNodes;
-		int maxNstatesInMedoid = 1;
+	// #pragma omp parallel 
+  {
+  	// #pragma omp single nowait
+    {
+			// for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
+			// for(vector<PhysNode*>::iterator phys_it = physNodeVec.begin(); phys_it < physNodeVec.end(); phys_it++){
+    	#pragma omp parallel for schedule(dynamic)
+    	for(int i=0;i<NphysNodes;i++){
 
-		if(NPstateNodes > NfinalClu){
-
-			// Initialize vector of vectors with state nodes in physical node with minimum necessary information
-			// The first Nclu elements will be centers
-			vector<LocalStateNode> medoid(NPstateNodes);
-			for(int i=0;i<NPstateNodes;i++){
-				medoid[i].stateId = physNode.stateNodeIndices[i];
-				medoid[i].stateNode = &stateNodes[physNode.stateNodeIndices[i]];
-			}
-
-			unordered_map<int,vector<LocalStateNode> > medoids;
-			medoids[0] = move(medoid);
-
-			// Initialize vector to store centers and stateId of closest center
-			double oldSumMinDiff = 0.0;
-			double sumMinDiv;
-			for(int i=0;i<Nlevels;i++){
-				Nclu = NcluVec[i];
-				// Each iteration increases the number of medoids multiplicatively
-				sumMinDiv = findCenters(medoids);
-				// Update centers as long as total distance to median changes more than threshold (max 5 iterations)
-				int Nupdates = 0;
-				if(NrandStates != 0){
-					while( (fabs(sumMinDiv-oldSumMinDiff) > threshold) && (Nupdates < 5) ){
-						swap(oldSumMinDiff,sumMinDiv);
-						sumMinDiv = updateCenters(medoids);
-						Nupdates++;
+				// #pragma omp task
+        {
+					PhysNode &physNode = *physNodeVec[i];
+					// PhysNode &physNode = phys_it->second;
+					int NPstateNodes = physNode.stateNodeIndices.size();
+					int Nmedoids = NPstateNodes;
+					int maxNstatesInMedoid = 1;
+			
+					if(NPstateNodes > NfinalClu){
+			
+						// Initialize vector of vectors with state nodes in physical node with minimum necessary information
+						// The first Nclu elements will be centers
+						vector<LocalStateNode> medoid(NPstateNodes);
+						for(int i=0;i<NPstateNodes;i++){
+							medoid[i].stateId = physNode.stateNodeIndices[i];
+							medoid[i].stateNode = &stateNodes[physNode.stateNodeIndices[i]];
+						}
+			
+						unordered_map<int,vector<LocalStateNode> > medoids;
+						medoids[0] = move(medoid);
+			
+						// Initialize vector to store centers and stateId of closest center
+						double oldSumMinDiff = 0.0;
+						double sumMinDiv;
+						for(int i=0;i<Nlevels;i++){
+							Nclu = NcluVec[i];
+							// Each iteration increases the number of medoids multiplicatively
+							sumMinDiv = findCenters(medoids);
+							// Update centers as long as total distance to median changes more than threshold (max 5 iterations)
+							int Nupdates = 0;
+							if(NrandStates != 0){
+								while( (fabs(sumMinDiv-oldSumMinDiff) > threshold) && (Nupdates < 5) ){
+									swap(oldSumMinDiff,sumMinDiv);
+									sumMinDiv = updateCenters(medoids);
+									Nupdates++;
+								}
+							}
+						}
+			
+						// Free cached divergences
+						// cachedWJSdiv = unordered_map<pair<int,int>,double,pairhash>();
+			
+						Nmedoids = medoids.size();
+						for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids.begin(); medoid_it != medoids.end(); medoid_it++){
+							maxNstatesInMedoid = max(maxNstatesInMedoid,static_cast<int>(medoid_it->second.size()));
+						}
+			
+						// Perform the lumping and update stateNodes
+						performLumping(medoids);
+						Nlumpings += NPstateNodes - Nmedoids;
+						NstateNodes -= NPstateNodes - Nmedoids;
+			
 					}
-				}
-			}
-
-			// Free cached divergences
-			// cachedWJSdiv = unordered_map<pair<int,int>,double,pairhash>();
-
-			Nmedoids = medoids.size();
-			for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids.begin(); medoid_it != medoids.end(); medoid_it++){
-				maxNstatesInMedoid = max(maxNstatesInMedoid,static_cast<int>(medoid_it->second.size()));
-			}
-
-			// Perform the lumping and update stateNodes
-			performLumping(medoids);
-			Nlumpings += NPstateNodes - Nmedoids;
-			NstateNodes -= NPstateNodes - Nmedoids;
-
-		}
-		else if(NPstateNodes == 0){
-			NphysDanglings++;
-		}
-
-		Nprocessed++;
-		cout << "\n-->Lumped " << Nlumpings << " (now " << max(NPstateNodes,1) << " to max " << maxNstatesInMedoid << " states in medoid) state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
-	}
+					else if(NPstateNodes == 0){
+						NphysDanglings++;
+					}
+			
+					Nprocessed++;
+					cout << "\n-->Lumped " << Nlumpings << " (now " << max(NPstateNodes,1) << " to max " << maxNstatesInMedoid << " states in medoid) state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
+				} // end of #pragma omp task
+			} // end of for loop
+		} // end of #pragma omp single nowait
+	} // end of #pragma omp parallel
 	cout << endl << "-->Updating state node ids" << endl;
 
 	// Update stateIds

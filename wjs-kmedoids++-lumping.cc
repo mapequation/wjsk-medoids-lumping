@@ -25,7 +25,6 @@ int main(int argc,char *argv[]){
     cout << CALL_SYNTAX;
     exit(-1);
   }
-
   unsigned int seed = 1234;
 
   string inFileName;
