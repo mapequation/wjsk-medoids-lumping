@@ -695,11 +695,9 @@ void StateNetwork::performLumping(unordered_map<int,vector<LocalStateNode> > &me
 			// Add context to lumped state node
 			lumpedStateNode.contexts.insert(lumpedStateNode.contexts.begin(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
 			// Add links to lumped state node
-			Nlinks  -= lumpedStateNode.links.size() + lumpingStateNode.links.size(); // To update the global number of links
 			for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++){
 				lumpedStateNode.links[link_it->first] += link_it->second;
 			}
-			Nlinks += lumpedStateNode.links.size(); // To update the global number of links
 	
 			lumpedStateNode.outWeight += lumpingStateNode.outWeight;
 	
@@ -805,9 +803,11 @@ void StateNetwork::lumpStateNodes(){
 
 	// Update stateIds
 	// First all active state nodes that other state nodes have lumped to
+	Nlinks = 0; // Update number of links
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 		StateNode &stateNode = it->second;
 		if(stateNode.active){
+			Nlinks += stateNode.links.size(); // Update number of links
 			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
 			stateNode.updatedStateId = updatedStateId;
 			updatedStateId++;
