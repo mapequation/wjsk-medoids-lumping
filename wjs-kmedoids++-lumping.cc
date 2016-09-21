@@ -110,8 +110,10 @@ int main(int argc,char *argv[]){
 
   StateNetwork statenetwork(inFileName,outFileName,NfinalClu,Nlevels,NcluVec,batchOutput,NrandStates,mtRand);
 
-  while(statenetwork.loadStateNetworkBatch()){
+  int NprocessedBatches = 0;
+  while(NprocessedBatches < 5 && statenetwork.loadStateNetworkBatch()){
     statenetwork.lumpStateNodes();
+    NprocessedBatches++;
     if(statenetwork.keepReading || statenetwork.Nbatches > 1){
       statenetwork.printStateNetworkBatch();
       statenetwork.concludeBatch();

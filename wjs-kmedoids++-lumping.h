@@ -13,6 +13,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
 #ifdef _OPENMP
 #include <omp.h>
 #include <stdio.h>
@@ -69,6 +70,7 @@ public:
 	double outWeight;
 	bool active = true;
 	map<int,double> links;
+	map<int,double> physLinks;
 	vector<string> contexts;
 };
 
@@ -87,6 +89,7 @@ public:
 	LocalStateNode(int stateid);
 	int stateId;
 	double minDiv = bignum;
+	double minDiv2 = bignum;
 	StateNode *minCenterStateNode;
 	StateNode *stateNode;
 };
@@ -112,6 +115,7 @@ PhysNode::PhysNode(){
 class StateNetwork{
 private:
 	double calcEntropyRate();
+	double calcEntropyRate(PhysNode &physNode);
 	double wJSdiv(int stateId1, int stateId2);
 	double wJSdiv(StateNode &stateNode1, StateNode &stateNode2);
 	double findCenters(unordered_map<int,vector<LocalStateNode> > &medoids);
@@ -132,7 +136,7 @@ private:
 	int NrandStates;
 	mt19937 &mtRand;
 	ifstream ifs;
-  string line = "First line";
+  string line;
   double totWeight = 0.0;
   double accumWeight = 0.0;
   int updatedStateId = 0;
@@ -159,6 +163,7 @@ private:
 	int Nclu;
 	// unordered_map<pair<int,int>,double,pairhash> cachedWJSdiv;
 	unordered_map<int,int> stateNodeIdMapping;
+	unordered_map<int,int> stateToPhysNodeMapping;
 	unordered_map<int,PhysNode> physNodes;
 	unordered_map<int,StateNode> stateNodes;
 
@@ -166,6 +171,7 @@ public:
 	StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> &NcluVec,bool batchOutput,int NrandStates,mt19937 &mtRand);
 	
 	void lumpStateNodes();
+	void loadNodeMapping();
 	bool loadStateNetworkBatch();
 	void printStateNetworkBatch();
 	void printStateNetwork();
@@ -191,13 +197,19 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,int NfinalClu,in
 	this->tmpOutFileNameLinks = string(outFileName).append("_tmplinks");
 	this->tmpOutFileNameContexts = string(outFileName).append("_tmpcontexts");
 	
-
-	// Open state network
+	// Open state network for building state node to physical node mapping
 	ifs.open(inFileName.c_str());
 	if(!ifs){
 		cout << "failed to open \"" << inFileName << "\" exiting..." << endl;
 		exit(-1);
 	}
+	loadNodeMapping();
+	ifs.close();
+
+	// Open state network to read batches one by one
+	line = "First line";
+	ifs.open(inFileName.c_str());
+
 }
 
 
@@ -239,10 +251,10 @@ double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 		return 0.0;
 	}
 
-	map<int,double>::iterator links1 = stateNode1.links.begin();
-	map<int,double>::iterator links2 = stateNode2.links.begin();
-	map<int,double>::iterator links1end = stateNode1.links.end();
-	map<int,double>::iterator links2end = stateNode2.links.end();
+	map<int,double>::iterator links1 = stateNode1.physLinks.begin();
+	map<int,double>::iterator links2 = stateNode2.physLinks.begin();
+	map<int,double>::iterator links1end = stateNode1.physLinks.end();
+	map<int,double>::iterator links2end = stateNode2.physLinks.end();
 	
 	while(links1 != links1end && links2 != links2end){
 
@@ -252,9 +264,9 @@ double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 		// If the first state node has a link that the second has not
 
 			double p1 = links1->second/ow1;
-			h1 -= p1*log(p1);
+			h1 -= p1*log2(p1);
 			double p12 = pi1*links1->second/ow1;
-			h12 -= p12*log(p12);
+			h12 -= p12*log2(p12);
 			links1++;
 
 		}
@@ -262,20 +274,20 @@ double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 		// If the second state node has a link that the second has not
 
 			double p2 = links2->second/ow2;
-			h2 -= p2*log(p2);
+			h2 -= p2*log2(p2);
 			double p12 = pi2*links2->second/ow2;
-			h12 -= p12*log(p12);
+			h12 -= p12*log2(p12);
 			links2++;
 
 		}
 		else{ // If both state nodes have the link
 
 			double p1 = links1->second/ow1;
-			h1 -= p1*log(p1);
+			h1 -= p1*log2(p1);
 			double p2 = links2->second/ow2;
-			h2 -= p2*log(p2);
+			h2 -= p2*log2(p2);
 			double p12 = pi1*links1->second/ow1 + pi2*links2->second/ow2;
-			h12 -= p12*log(p12);
+			h12 -= p12*log2(p12);
 			links1++;
 			links2++;
 
@@ -286,9 +298,9 @@ double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 		// If the first state node has a link that the second has not
 
 		double p1 = links1->second/ow1;
-		h1 -= p1*log(p1);
+		h1 -= p1*log2(p1);
 		double p12 = pi1*links1->second/ow1;
-		h12 -= p12*log(p12);
+		h12 -= p12*log2(p12);
 		links1++;
 
 	}
@@ -297,9 +309,9 @@ double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 		// If the second state node has a link that the second has not
 
 		double p2 = links2->second/ow2;
-		h2 -= p2*log(p2);
+		h2 -= p2*log2(p2);
 		double p12 = pi2*links2->second/ow2;
-		h12 -= p12*log(p12);
+		h12 -= p12*log2(p12);
 		links2++;
 
 	}
@@ -353,10 +365,10 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 		return 0.0;
 	}
 
-	map<int,double>::iterator links1 = stateNode1.links.begin();
-	map<int,double>::iterator links2 = stateNode2.links.begin();
-	map<int,double>::iterator links1end = stateNode1.links.end();
-	map<int,double>::iterator links2end = stateNode2.links.end();
+	map<int,double>::iterator links1 = stateNode1.physLinks.begin();
+	map<int,double>::iterator links2 = stateNode2.physLinks.begin();
+	map<int,double>::iterator links1end = stateNode1.physLinks.end();
+	map<int,double>::iterator links2end = stateNode2.physLinks.end();
 	
 	while(links1 != links1end && links2 != links2end){
 
@@ -366,9 +378,9 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 		// If the first state node has a link that the second has not
 
 			double p1 = links1->second/ow1;
-			h1 -= p1*log(p1);
+			h1 -= p1*log2(p1);
 			double p12 = pi1*links1->second/ow1;
-			h12 -= p12*log(p12);
+			h12 -= p12*log2(p12);
 			links1++;
 
 		}
@@ -376,20 +388,20 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 		// If the second state node has a link that the second has not
 
 			double p2 = links2->second/ow2;
-			h2 -= p2*log(p2);
+			h2 -= p2*log2(p2);
 			double p12 = pi2*links2->second/ow2;
-			h12 -= p12*log(p12);
+			h12 -= p12*log2(p12);
 			links2++;
 
 		}
 		else{ // If both state nodes have the link
 
 			double p1 = links1->second/ow1;
-			h1 -= p1*log(p1);
+			h1 -= p1*log2(p1);
 			double p2 = links2->second/ow2;
-			h2 -= p2*log(p2);
+			h2 -= p2*log2(p2);
 			double p12 = pi1*links1->second/ow1 + pi2*links2->second/ow2;
-			h12 -= p12*log(p12);
+			h12 -= p12*log2(p12);
 			links1++;
 			links2++;
 
@@ -400,9 +412,9 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 		// If the first state node has a link that the second has not
 
 		double p1 = links1->second/ow1;
-		h1 -= p1*log(p1);
+		h1 -= p1*log2(p1);
 		double p12 = pi1*links1->second/ow1;
-		h12 -= p12*log(p12);
+		h12 -= p12*log2(p12);
 		links1++;
 
 	}
@@ -411,9 +423,9 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 		// If the second state node has a link that the second has not
 
 		double p2 = links2->second/ow2;
-		h2 -= p2*log(p2);
+		h2 -= p2*log2(p2);
 		double p12 = pi2*links2->second/ow2;
-		h12 -= p12*log(p12);
+		h12 -= p12*log2(p12);
 		links2++;
 
 	}
@@ -439,13 +451,51 @@ double StateNetwork::calcEntropyRate(){
 
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 		StateNode &stateNode = it->second;
+		// if(stateNode.active){
+		// 	double H = 0.0;
+		// 	double weight = 0.0;
+		// 	unordered_map<int,double> physLinks;
+		// 	for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
+		// 		physLinks[stateToPhysNodeMapping[it_link->first]] += it_link->second;
+		// 		weight += it_link->second;
+		// 	}
+		// 	for(unordered_map<int,double>::iterator it_link = physLinks.begin(); it_link != physLinks.end(); it_link++){
+		// 		double p = it_link->second/weight;
+		// 		H -= p*log2(p);	
+		// 	}
+			
+		// 	h += weight*H/totWeight;
+		// }
 		if(stateNode.active){
 			double H = 0.0;
-			for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
+
+			for(map<int,double>::iterator it_link = stateNode.physLinks.begin(); it_link != stateNode.physLinks.end(); it_link++){
 				double p = it_link->second/stateNode.outWeight;
-				H -= p*log(p);
+				H -= p*log2(p);
 			}
-			h += stateNode.outWeight*H/totWeight/log(2.0);
+			h += stateNode.outWeight*H/totWeight;
+		}
+	}
+
+	return h;
+
+}
+
+double StateNetwork::calcEntropyRate(PhysNode &physNode){
+
+	double h = 0.0;
+
+	for(vector<int>::iterator stateNodeId_it = physNode.stateNodeIndices.begin(); stateNodeId_it != physNode.stateNodeIndices.end(); stateNodeId_it++){
+
+		StateNode &stateNode = stateNodes[*stateNodeId_it];
+		if(stateNode.active){
+			double H = 0.0;
+
+			for(map<int,double>::iterator it_link = stateNode.physLinks.begin(); it_link != stateNode.physLinks.end(); it_link++){
+				double p = it_link->second/stateNode.outWeight;
+				H -= p*log2(p);
+			}
+			h += stateNode.outWeight*H/totWeight;
 		}
 	}
 
@@ -466,41 +516,65 @@ double StateNetwork::updateCenters(unordered_map<int,vector<LocalStateNode> > &m
 		double minDivSumInMedoid = bignum*NstatesInMedoid;
 		int minDivSumInMedoidIndex = 0;
 		
-		// Find total divergence for random subset of state nodes in medoid
-		if(NrandStates > 0 && NstatesInMedoid > NrandStates){
-			int NrandStatesGenerated = 0;
-			vector<int> randStates = vector<int>(NrandStates);
-			vector<int> randStateSpace = vector<int>(NstatesInMedoid);
-			for(int i=0;i<NstatesInMedoid;i++)
-				randStateSpace[i] = i;
-			for(int i=0;i<NrandStates;i++){
-				uniform_int_distribution<int> randInt(0,NstatesInMedoid-NrandStatesGenerated-1);
-				int randElement = randInt(mtRand);
-				randStates[NrandStatesGenerated] = randStateSpace[randElement];
-				NrandStatesGenerated++;
-				swap(randStateSpace[randElement],randStateSpace[NstatesInMedoid-NrandStatesGenerated-1]);
-			}
-			for(int jre=0;jre<NrandStates;jre++){
-				medoid[randStates[jre]].minDiv = 0.0;
-			}
-			for(int jre=0;jre<NrandStates;jre++){
-				int j = randStates[jre];
-				for(int kre=jre+1;kre<NrandStates;kre++){
-					int k = randStates[kre];
-					double div = wJSdiv(*medoid[j].stateNode,*medoid[k].stateNode);
-					medoid[j].minDiv += div;
-					medoid[k].minDiv += div;
+
+		// Find new center with pivot method
+		if(NstatesInMedoid > 10){
+
+			// Find random state node to identify remote state node S1
+			uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
+			int randomStateInMedoidIndex = randInt(mtRand);
+			double maxDiv = 0.0;
+			int S1MedoidIndex = randomStateInMedoidIndex;
+			for(int j=0;j<NstatesInMedoid;j++){
+				double div = wJSdiv(*medoid[randomStateInMedoidIndex].stateNode,*medoid[j].stateNode);
+				medoid[j].minDiv = div;
+				if(div > maxDiv){
+					maxDiv = div;
+					S1MedoidIndex = j;
 				}
 			}
-			for(int jre=0;jre<NrandStates;jre++){	
-				int j = randStates[jre];
-				if(medoid[j].minDiv < minDivSumInMedoid){
-					minDivSumInMedoid = medoid[j].minDiv;
+			// Calculate distances to S1 and find S2
+			int S2MedoidIndex = S1MedoidIndex;
+			maxDiv = 0.0;
+			for(int j=0;j<NstatesInMedoid;j++){
+				double div = wJSdiv(*medoid[S1MedoidIndex].stateNode,*medoid[j].stateNode);
+				medoid[j].minDiv = div;
+				if(div > maxDiv){
+					maxDiv = div;
+					S2MedoidIndex = j;
+				}
+			}
+			// Calculate distances to S2 and projected distances to S1
+			double divS1toS2squared = pow(maxDiv,2.0);
+			vector<double> projDivToS1;
+			projDivToS1.reserve(NstatesInMedoid);
+
+			for(int j=0;j<NstatesInMedoid;j++){
+				double div = wJSdiv(*medoid[S2MedoidIndex].stateNode,*medoid[j].stateNode);
+				medoid[j].minDiv2 = div;
+				double divStoS2squared = pow(div,2.0);
+				double divStoS1squared = pow(medoid[j].minDiv,2.0);
+
+				projDivToS1.push_back(0.5*(divStoS1squared + divS1toS2squared - divStoS2squared)/divS1toS2squared);
+			}
+
+			// Find median projected distance to S1 on the line from S1 to S2
+			int n = projDivToS1.size()/2;
+			nth_element(projDivToS1.begin(), projDivToS1.begin()+n, projDivToS1.end());
+			double projMedianDiv = projDivToS1[n];
+
+			// Find state node clostest to median projected distance to S1 on the line from S1 to S2
+			for(int j=0;j<NstatesInMedoid;j++){
+				double DivSumInMedoid = fabs(medoid[j].minDiv-projMedianDiv) + fabs(medoid[j].minDiv2-(medoid[S1MedoidIndex].minDiv2-projMedianDiv));
+				if(DivSumInMedoid < minDivSumInMedoid){
+					minDivSumInMedoid = DivSumInMedoid;
 					minDivSumInMedoidIndex = j;
 				}
 			}
+
 		}
-		else{
+		else{ 
+
 			// Find total divergence for each state node in medoid
 			for(int j=0;j<NstatesInMedoid;j++)
 				medoid[j].minDiv = 0.0;
@@ -517,7 +591,62 @@ double StateNetwork::updateCenters(unordered_map<int,vector<LocalStateNode> > &m
 					minDivSumInMedoidIndex = j;
 				}
 			}
+
 		}
+
+
+		// // Find total divergence for random subset of state nodes in medoid
+		// if(NrandStates > 0 && NstatesInMedoid > NrandStates){
+		// 	int NrandStatesGenerated = 0;
+		// 	vector<int> randStates = vector<int>(NrandStates);
+		// 	vector<int> randStateSpace = vector<int>(NstatesInMedoid);
+		// 	for(int i=0;i<NstatesInMedoid;i++)
+		// 		randStateSpace[i] = i;
+		// 	for(int i=0;i<NrandStates;i++){
+		// 		uniform_int_distribution<int> randInt(0,NstatesInMedoid-NrandStatesGenerated-1);
+		// 		int randElement = randInt(mtRand);
+		// 		randStates[NrandStatesGenerated] = randStateSpace[randElement];
+		// 		NrandStatesGenerated++;
+		// 		swap(randStateSpace[randElement],randStateSpace[NstatesInMedoid-NrandStatesGenerated-1]);
+		// 	}
+		// 	for(int jre=0;jre<NrandStates;jre++){
+		// 		medoid[randStates[jre]].minDiv = 0.0;
+		// 	}
+		// 	for(int jre=0;jre<NrandStates;jre++){
+		// 		int j = randStates[jre];
+		// 		for(int kre=jre+1;kre<NrandStates;kre++){
+		// 			int k = randStates[kre];
+		// 			double div = wJSdiv(*medoid[j].stateNode,*medoid[k].stateNode);
+		// 			medoid[j].minDiv += div;
+		// 			medoid[k].minDiv += div;
+		// 		}
+		// 	}
+		// 	for(int jre=0;jre<NrandStates;jre++){	
+		// 		int j = randStates[jre];
+		// 		if(medoid[j].minDiv < minDivSumInMedoid){
+		// 			minDivSumInMedoid = medoid[j].minDiv;
+		// 			minDivSumInMedoidIndex = j;
+		// 		}
+		// 	}
+		// }
+		// else{
+		// 	// Find total divergence for each state node in medoid
+		// 	for(int j=0;j<NstatesInMedoid;j++)
+		// 		medoid[j].minDiv = 0.0;
+		// 	for(int j=0;j<NstatesInMedoid;j++){
+		// 		for(int k=j+1;k<NstatesInMedoid;k++){
+		// 			double div = wJSdiv(*medoid[j].stateNode,*medoid[k].stateNode);
+		// 			medoid[j].minDiv += div;
+		// 			medoid[k].minDiv += div;
+		// 		}
+		// 	}
+		// 	for(int j=0;j<NstatesInMedoid;j++){		
+		// 		if(medoid[j].minDiv < minDivSumInMedoid){
+		// 			minDivSumInMedoid = medoid[j].minDiv;
+		// 			minDivSumInMedoidIndex = j;
+		// 		}
+		// 	}
+		// }
 
 		// Update localStateNodes to have all minCenterStateNodes point to the global StateNodes and to keep centers within the first Nclu elements.
 		StateNode *newCenterStateNode = medoid[minDivSumInMedoidIndex].stateNode;
@@ -525,10 +654,12 @@ double StateNetwork::updateCenters(unordered_map<int,vector<LocalStateNode> > &m
 			medoid[j].minCenterStateNode = newCenterStateNode;
 		}
 		swap(medoid[0],medoid[minDivSumInMedoidIndex]); // Swap such that the first index in medoid is center
+		medoid[0].minDiv = bignum; // Reset for next round
 	}
 
 	// Move to medoid associated with closest center
 	double sumMinDiv = bignum*(NPstateNodes-Nmedoids);
+	
 	// Updated centers first in updated medoids
 	unordered_map<int,vector<LocalStateNode> > updatedMedoids;
 	for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids.begin(); medoid_it != medoids.end(); medoid_it++){
@@ -546,15 +677,15 @@ double StateNetwork::updateCenters(unordered_map<int,vector<LocalStateNode> > &m
 				if(div < medoid[j].minDiv){
 					sumMinDiv -= medoid[j].minDiv;
 					medoid[j].minDiv = div;
-					sumMinDiv += medoid[j].minDiv;
+					sumMinDiv += div;
 					medoid[j].minCenterStateNode = updatedMedoid_it->second[0].stateNode;
 				}
 			}	
 			// Add to updated medoids in medoid with closest center
+			medoid[j].minDiv = bignum; // Reset for next run
 			updatedMedoids[medoid[j].minCenterStateNode->stateId].push_back(medoid[j]);
 		}
 	}
-
 	swap(medoids,updatedMedoids);
 	return sumMinDiv;
 
@@ -591,6 +722,7 @@ double StateNetwork::findCenters(unordered_map<int,vector<LocalStateNode> > &med
 			int firstCenterIndex = randInt(mtRand);
 			medoid[firstCenterIndex].minCenterStateNode = medoid[firstCenterIndex].stateNode;
 			minDivSumInMedoid -= medoid[firstCenterIndex].minDiv;
+
 			// Put the center in first non-center position (Ncenters = 0) by swapping elements
 			swap(medoid[Ncenters],medoid[firstCenterIndex]);
 			Ncenters++;
@@ -698,6 +830,10 @@ void StateNetwork::performLumping(unordered_map<int,vector<LocalStateNode> > &me
 			for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++){
 				lumpedStateNode.links[link_it->first] += link_it->second;
 			}
+			// Add physical links to lumped state node
+			for(map<int,double>::iterator link_it = lumpingStateNode.physLinks.begin(); link_it != lumpingStateNode.physLinks.end(); link_it++){
+				lumpedStateNode.physLinks[link_it->first] += link_it->second;
+			}
 	
 			lumpedStateNode.outWeight += lumpingStateNode.outWeight;
 	
@@ -714,16 +850,14 @@ void StateNetwork::lumpStateNodes(){
 
 	cout << "Lumping state nodes in each physical node";
 	#ifdef _OPENMP
-	cout << ", using " << omp_get_max_threads() << " threds using " << _OPENMP << ":" << endl;
+	cout << ", using " << omp_get_max_threads() << " threds:" << endl;
 	#else
 	cout << ", using a single thread:" << endl;
 	#endif
 
-	int Nlumpings = 0;
-	int Nprocessed = 0;
-
 	// To be able to parallelize loop over physical nodes
 	vector<PhysNode*> physNodeVec;
+	physNodeVec.reserve(NphysNodes);
 	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++)
 		physNodeVec.push_back(&phys_it->second);
 
@@ -743,7 +877,12 @@ void StateNetwork::lumpStateNodes(){
 					int NPstateNodes = physNode.stateNodeIndices.size();
 					int Nmedoids = NPstateNodes;
 					int maxNstatesInMedoid = 1;
-			
+					int Nlumpings = 0;
+					double oldSumMinDiff = 0.0;
+					double sumMinDiv = 0.0;
+					int Nupdates = 0;
+					double preLumpingEntropyRate = calcEntropyRate(physNode);
+
 					if(NPstateNodes > NfinalClu){
 			
 						// Initialize vector of vectors with state nodes in physical node with minimum necessary information
@@ -758,18 +897,18 @@ void StateNetwork::lumpStateNodes(){
 						medoids[0] = move(medoid);
 			
 						// Initialize vector to store centers and stateId of closest center
-						double oldSumMinDiff = 0.0;
-						double sumMinDiv;
 						for(int i=0;i<Nlevels;i++){
 							Nclu = NcluVec[i];
 							// Each iteration increases the number of medoids multiplicatively
 							sumMinDiv = findCenters(medoids);
-							// Update centers as long as total distance to median changes more than threshold (max 5 iterations)
-							int Nupdates = 0;
+							// Update centers as long as total distance to median changes more than threshold (max 10 iterations)
+							oldSumMinDiff = 2*sumMinDiv;
 							if(NrandStates != 0){
-								while( (fabs(sumMinDiv-oldSumMinDiff) > threshold) && (Nupdates < 5) ){
+								while( (sumMinDiv < oldSumMinDiff) && (fabs(sumMinDiv-oldSumMinDiff) > threshold) && (Nupdates < 100) ){
+									cout << fabs(sumMinDiv-oldSumMinDiff) << " ";
 									swap(oldSumMinDiff,sumMinDiv);
 									sumMinDiv = updateCenters(medoids);
+
 									Nupdates++;
 								}
 							}
@@ -785,16 +924,17 @@ void StateNetwork::lumpStateNodes(){
 			
 						// Perform the lumping and update stateNodes
 						performLumping(medoids);
-						Nlumpings += NPstateNodes - Nmedoids;
-						NstateNodes -= NPstateNodes - Nmedoids;
+						Nlumpings = NPstateNodes - Nmedoids;
 			
 					}
 					else if(NPstateNodes == 0){
 						NphysDanglings++;
 					}
-			
-					Nprocessed++;
-					cout << "\n-->Lumped " << Nlumpings << " (now " << max(NPstateNodes,1) << " to max " << maxNstatesInMedoid << " states in medoid) state nodes in " << Nprocessed << "/" << NphysNodes << " physical nodes.               ";
+					
+					double postLumpingEntropyRate = calcEntropyRate(physNode);
+
+					string output = "\n-->Lumped " + to_string(Nlumpings) + " state nodes (from " + to_string(max(NPstateNodes,1)) + " to " + to_string(Nmedoids) + " with max " + to_string(maxNstatesInMedoid) + " lumped states and total divergence " + to_string(sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates) in physical node " + to_string(i) + "/" + to_string(NphysNodes) + ".               ";
+					cout << output;
 				} // end of #pragma omp task
 			} // end of for loop
 		} // end of #pragma omp single nowait
@@ -804,10 +944,12 @@ void StateNetwork::lumpStateNodes(){
 	// Update stateIds
 	// First all active state nodes that other state nodes have lumped to
 	Nlinks = 0; // Update number of links
+	NstateNodes = 0; // Update number of links
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 		StateNode &stateNode = it->second;
 		if(stateNode.active){
 			Nlinks += stateNode.links.size(); // Update number of links
+			NstateNodes++;
 			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
 			stateNode.updatedStateId = updatedStateId;
 			updatedStateId++;
@@ -835,6 +977,38 @@ bool StateNetwork::readLines(string &line,vector<string> &lines){
 	}
 
 	return false; // Reached end of file
+}
+
+void StateNetwork::loadNodeMapping(){
+
+	string buf;
+	istringstream ss;
+	bool isStateNode = false;
+	cout << "Loading state network to generate state node to physical node mapping:" << endl;
+	cout << "-->Reading states..." << flush;
+	while(getline(ifs,line)){
+		if(line[0] == '*'){
+			ss.clear();
+			ss.str(line);
+			ss >> buf;
+			if(buf == "*States")
+				isStateNode = true;
+			else
+				isStateNode = false;
+		}
+		else if(isStateNode && line[0] != '=' && line[0] != '#'){
+			ss.clear();
+			ss.str(line);
+			ss >> buf;
+			int stateId = atoi(buf.c_str());
+			ss >> buf;
+			int physId = atoi(buf.c_str());
+			stateToPhysNodeMapping[stateId] = physId;
+		}
+	}
+	cout << "found " << stateToPhysNodeMapping.size() << " states." << endl; 
+
+
 }
 
 bool StateNetwork::loadStateNetworkBatch(){
@@ -867,6 +1041,7 @@ bool StateNetwork::loadStateNetworkBatch(){
 		cout << "-->No more statenetwork batches to read." << endl;
 		return false;
 	}
+
 
 	while(!readStates || !readLinks || !readContexts){
 
@@ -939,6 +1114,7 @@ bool StateNetwork::loadStateNetworkBatch(){
 		ss >> buf;
 		double linkWeight = atof(buf.c_str());
 		stateNodes[source].links[target] += linkWeight;
+		stateNodes[source].physLinks[stateToPhysNodeMapping[target]] += linkWeight;
 	}
  	cout << "done!" << endl;
 
