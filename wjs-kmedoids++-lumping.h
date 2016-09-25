@@ -648,7 +648,7 @@ double StateNetwork::updateCenters(unordered_map<int,vector<LocalStateNode> > &m
 		// 	}
 		// }
 
-		// Update localStateNodes to have all minCenterStateNodes point to the global StateNodes and to keep centers within the first Nclu elements.
+		// Update localStateNodes to have minCenterStateNode point to the global StateNodes and place the center first in medoid.
 		StateNode *newCenterStateNode = medoid[minDivSumInMedoidIndex].stateNode;
 		for(int j=0;j<NstatesInMedoid;j++){
 			medoid[j].minCenterStateNode = newCenterStateNode;
@@ -730,6 +730,7 @@ double StateNetwork::findCenters(unordered_map<int,vector<LocalStateNode> > &med
 		
 			// Find Nclu-1 more centers based on the k++ algorithm
 			while(Ncenters < Nclu){
+
 				StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
 				for(int i=Ncenters;i<NstatesInMedoid;i++){
 					double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
@@ -753,6 +754,7 @@ double StateNetwork::findCenters(unordered_map<int,vector<LocalStateNode> > &med
 						break;
 					}
 				}
+
 				medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
 				minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
 				// Put the center in first non-center position by swapping elements
@@ -903,9 +905,9 @@ void StateNetwork::lumpStateNodes(){
 							sumMinDiv = findCenters(medoids);
 							// Update centers as long as total distance to median changes more than threshold (max 10 iterations)
 							oldSumMinDiff = 2*sumMinDiv;
-							if(NrandStates != 0){
+							if(NrandStates != 0 && (i == (Nlevels-1))){
 								while( (sumMinDiv < oldSumMinDiff) && (fabs(sumMinDiv-oldSumMinDiff) > threshold) && (Nupdates < 100) ){
-									cout << fabs(sumMinDiv-oldSumMinDiff) << " ";
+									// cout << fabs(sumMinDiv-oldSumMinDiff) << " ";
 									swap(oldSumMinDiff,sumMinDiv);
 									sumMinDiv = updateCenters(medoids);
 

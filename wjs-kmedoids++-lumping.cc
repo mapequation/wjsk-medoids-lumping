@@ -111,7 +111,7 @@ int main(int argc,char *argv[]){
   StateNetwork statenetwork(inFileName,outFileName,NfinalClu,Nlevels,NcluVec,batchOutput,NrandStates,mtRand);
 
   int NprocessedBatches = 0;
-  while(NprocessedBatches < 5 && statenetwork.loadStateNetworkBatch()){
+  while(statenetwork.loadStateNetworkBatch()){ // NprocessedBatches < 5 &&
     statenetwork.lumpStateNodes();
     NprocessedBatches++;
     if(statenetwork.keepReading || statenetwork.Nbatches > 1){
