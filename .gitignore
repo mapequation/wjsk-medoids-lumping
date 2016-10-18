@@ -34,3 +34,9 @@ wjs-kmedoids++-lumping
 
 wjs-kmedoids++-lumping.dSYM
 profile
+
+*.net_tmpcontexts
+
+*.net_tmplinks
+
+*.net_tmpstates

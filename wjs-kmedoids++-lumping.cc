@@ -20,7 +20,7 @@ int main(int argc,char *argv[]){
   cout << endl;
 
   // Parse command input
-  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] -k <number of clusters> -l <number of hierarchical levels> --batchoutput --num-update-states <number of random state nodes in medoid update> input_state_network.net output_state_network.net\n";
+  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [-l <number of hierarchical levels>] [--tune] [--batchoutput] input_state_network.net output_state_network.net\n";
   if( argc == 1 ){
     cout << CALL_SYNTAX;
     exit(-1);
@@ -33,8 +33,9 @@ int main(int argc,char *argv[]){
   int argNr = 1;
   int Nlevels = 1;
   int NfinalClu = 100;
+  int Nattempts = 1;
   bool batchOutput = false;
-  int NrandStates = -1;
+  bool tune = false;
   while(argNr < argc){
     if(to_string(argv[argNr]) == "-h"){
       cout << CALL_SYNTAX;
@@ -49,9 +50,13 @@ int main(int argc,char *argv[]){
       batchOutput = true;
       argNr++;
     }
-    else if(to_string(argv[argNr]) == "--num-update-states"){
+    else if(to_string(argv[argNr]) == "--tune"){
+      tune = true;
       argNr++;
-      NrandStates = atoi(argv[argNr]);
+    }
+    else if(to_string(argv[argNr]) == "-N"){
+      argNr++;
+      Nattempts = atoi(argv[argNr]);
       argNr++;
     }
     else if(to_string(argv[argNr]) == "-k"){
@@ -86,6 +91,7 @@ int main(int argc,char *argv[]){
   cout << "-->Using seed: " << seed << endl;
   cout << "-->Will lump state nodes into (at most) number of clusters per physical node: " << NfinalClu << endl;
   cout << "-->Will get there in the number of hierarchical levels: " << Nlevels << endl;
+  cout << "-->Will make number of attempts: " << Nattempts << endl;
   cout << "-->Will multiply the number of clusters in each hierarchical level by factors: ";
   int N = NfinalClu;
   int actualNfinalClu = 1;
@@ -97,18 +103,16 @@ int main(int argc,char *argv[]){
     NcluVec[Nlevels-i] = multiplier;
   }
   cout << "(" << actualNfinalClu << ")" << endl;
-  if(NrandStates < 0)
-    cout << "-->Will use all random state nodes in medoid update (slowest)." << endl;
-  else if(NrandStates == 0)
-    cout << "-->Will not iteratively update medoids for better accuracy (fastest)." << endl;
+  if(tune)
+    cout << "-->Will iteratively tune medoids in deepest hierarchical level (slowest)." << endl;
   else
-    cout << "-->Will sample number of random state nodes in medoid update: " << NrandStates << endl;
+    cout << "-->Will not iteratively tune medoids for better accuracy (fastest)." << endl;
   cout << "-->Will read state network from file: " << inFileName << endl;
   cout << "-->Will write processed state network to file: " << outFileName << endl;
 
   mt19937 mtRand(seed);
 
-  StateNetwork statenetwork(inFileName,outFileName,NfinalClu,Nlevels,NcluVec,batchOutput,NrandStates,mtRand);
+  StateNetwork statenetwork(inFileName,outFileName,NfinalClu,Nlevels,NcluVec,Nattempts,tune,batchOutput,mtRand);
 
   int NprocessedBatches = 0;
   while(statenetwork.loadStateNetworkBatch()){ // NprocessedBatches < 5 &&

@@ -132,7 +132,8 @@ private:
 	string tmpOutFileNameLinks;
 	string tmpOutFileNameContexts;
 	bool batchOutput = false;
-	int NrandStates;
+	int Nattempts = 1;
+	bool tune = false;
 	mt19937 &mtRand;
 	ifstream ifs;
   string line;
@@ -167,8 +168,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> &NcluVec,bool batchOutput,int NrandStates,mt19937 &mtRand);
-	
+	StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> &NcluVec,int Nattempts,bool tune,bool batchOutput,mt19937 &mtRand); 
 	void lumpStateNodes();
 	void loadNodeMapping();
 	bool loadStateNetworkBatch();
@@ -182,12 +182,13 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> &NcluVec,bool batchOutput,int NrandStates,mt19937 &mtRand) : mtRand(mtRand), NcluVec(NcluVec){
+StateNetwork::StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> &NcluVec,int Nattempts,bool tune,bool batchOutput,mt19937 &mtRand) : mtRand(mtRand), NcluVec(NcluVec){
 	this->NfinalClu = NfinalClu;
 	this->Nlevels = Nlevels;
 	this->NcluVec = NcluVec;
 	Nclu = NcluVec[0];
-	this->NrandStates = NrandStates;
+	this->Nattempts = Nattempts;
+	this->tune = tune;
 	this->batchOutput = batchOutput;
 	this->inFileName = inFileName;
 	this->outFileName = outFileName;
@@ -521,7 +522,7 @@ double StateNetwork::updateCenters(vector<unordered_map<int,vector<LocalStateNod
 			
 	
 			// Find new center with pivot method
-			if(NstatesInMedoid > 10){
+			if(NstatesInMedoid > 50){
 	
 				// Find random state node to identify remote state node S1
 				uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
@@ -876,15 +877,46 @@ void StateNetwork::lumpStateNodes(){
 	cout << "Lumping state nodes in each physical node";
 	#ifdef _OPENMP
 	cout << ", using " << omp_get_max_threads() << " threds:" << endl;
+	// Initiate locks to keep track of best solutions
+	omp_lock_t lock[NphysNodes];
+	for (int i=0; i<NphysNodes; i++)
+    omp_init_lock(&(lock[i]));
 	#else
 	cout << ", using a single thread:" << endl;
 	#endif
 
+	// To keept track of best solutions
+	vector<int> attemptsLeftVec(NphysNodes,0);
+	vector<double> bestSumMinDiv(NphysNodes);
+	vector<vector<unordered_map<int,vector<LocalStateNode> > > > bestMedoidsTree(NphysNodes);
+
 	// To be able to parallelize loop over physical nodes
+	int Nattempts = 5;
+	int NtotAttempts = 0;
+	int PhysNodeNr = 0;
+	unordered_map<int,int> attemptToPhysNodeNrMap;
 	vector<PhysNode*> physNodeVec;
-	physNodeVec.reserve(NphysNodes);
-	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++)
-		physNodeVec.push_back(&phys_it->second);
+	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
+		int NPstateNodes = phys_it->second.stateNodeIndices.size();
+		if(NPstateNodes > NfinalClu){
+			// Non-trivial problem with need for multiple attempts
+			bestSumMinDiv[PhysNodeNr] = NPstateNodes*bignum;
+			for(int i=0;i<Nattempts;i++){
+				physNodeVec.push_back(&phys_it->second);
+				attemptToPhysNodeNrMap[NtotAttempts] = PhysNodeNr;
+				attemptsLeftVec[PhysNodeNr]++;
+				NtotAttempts++;
+			}
+		}
+		else{
+			// Trivial problem with no need for multiple attempts
+			physNodeVec.push_back(&phys_it->second);
+			attemptToPhysNodeNrMap[NtotAttempts] = PhysNodeNr;
+			attemptsLeftVec[PhysNodeNr]++;
+			NtotAttempts++;
+		}
+		PhysNodeNr++;
+	}
 
 	// #pragma omp parallel 
   {
@@ -892,12 +924,13 @@ void StateNetwork::lumpStateNodes(){
     {
 			// for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
 			// for(vector<PhysNode*>::iterator phys_it = physNodeVec.begin(); phys_it < physNodeVec.end(); phys_it++){
-    	#pragma omp parallel for schedule(dynamic)
-    	for(int i=0;i<NphysNodes;i++){
+    	#pragma omp parallel for schedule(dynamic,1) // default(none) shared(attemptsLeftVec,bestSumMinDiv,bestMedoidsTree,physNodeVec,lock)
+    	for(int attempt=0;attempt<NtotAttempts;attempt++){
 
 				// #pragma omp task
         {
-					PhysNode &physNode = *physNodeVec[i];
+        	int PhysNodeNr = attemptToPhysNodeNrMap[attempt];
+					PhysNode &physNode = *physNodeVec[attempt];
 					// PhysNode &physNode = phys_it->second;
 					int NPstateNodes = physNode.stateNodeIndices.size();
 					int Nmedoids = NPstateNodes;
@@ -909,7 +942,7 @@ void StateNetwork::lumpStateNodes(){
 					double preLumpingEntropyRate = calcEntropyRate(physNode);
 
 					if(NPstateNodes > NfinalClu){
-			
+
 						// Initialize vector of vectors with state nodes in physical node with minimum necessary information
 						// The first Nclu elements will be centers
 						vector<LocalStateNode> medoid(NPstateNodes);
@@ -917,6 +950,7 @@ void StateNetwork::lumpStateNodes(){
 							medoid[i].stateId = physNode.stateNodeIndices[i];
 							medoid[i].stateNode = &stateNodes[physNode.stateNodeIndices[i]];
 						}
+
 			
 						vector<unordered_map<int,vector<LocalStateNode> > > medoidsTree(1);
 						medoidsTree[0][0] = move(medoid);
@@ -931,7 +965,7 @@ void StateNetwork::lumpStateNodes(){
 							sumMinDiv = findCenters(medoidsTree);
 							// Update centers as long as total distance to median changes more than threshold (max 10 iterations)
 							oldSumMinDiff = 2*sumMinDiv;
-							if(NrandStates != 0 && (i == (Nlevels-1))){
+							if(tune && (i == (Nlevels-1))){
 								while( (sumMinDiv < oldSumMinDiff) && (fabs(sumMinDiv-oldSumMinDiff) > threshold) && (Nupdates < 100) ){
 									// cout << fabs(sumMinDiv-oldSumMinDiff) << " ";
 									swap(oldSumMinDiff,sumMinDiv);
@@ -941,32 +975,59 @@ void StateNetwork::lumpStateNodes(){
 								}
 							}
 						}
+
+						// Update best solution
+						#ifdef _OPENMP
+						omp_set_lock(&(lock[PhysNodeNr]));
+						#endif
+						if(sumMinDiv < bestSumMinDiv[PhysNodeNr]){
+							bestSumMinDiv[PhysNodeNr] = sumMinDiv;
+							bestMedoidsTree[PhysNodeNr] = medoidsTree;
+						}
+						attemptsLeftVec[PhysNodeNr]--;
+						if(attemptsLeftVec[PhysNodeNr] == 0){
+
+							Nmedoids = 0;
+							for(vector<unordered_map<int,vector<LocalStateNode> > >::iterator medoids_it = bestMedoidsTree[PhysNodeNr].begin(); medoids_it != bestMedoidsTree[PhysNodeNr].end(); medoids_it++){
+								// Outer loop over sets of medoids
+								Nmedoids += medoids_it->size();
+								for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
+									// Inner loop over each set of medoids
+									maxNstatesInMedoid = max(maxNstatesInMedoid,static_cast<int>(medoid_it->second.size()));
+								}
+							}
+				
+							// Perform the lumping and update stateNodes
+							performLumping(bestMedoidsTree[PhysNodeNr]);
+							Nlumpings = NPstateNodes - Nmedoids;
+
+							double postLumpingEntropyRate = calcEntropyRate(physNode);
+
+							string output = "\n-->Lumped " + to_string(Nlumpings) + " state nodes (from " + to_string(max(NPstateNodes,1)) + " to " + to_string(Nmedoids) + " with max " + to_string(maxNstatesInMedoid) + " lumped states and total divergence " + to_string(sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates) in physical node " + to_string(PhysNodeNr) + "/" + to_string(NphysNodes) + ".               ";
+							cout << output;
+
+						}
+						#ifdef _OPENMP
+						omp_unset_lock(&(lock[PhysNodeNr]));
+						#endif
+
 			
 						// Free cached divergences
 						// cachedWJSdiv = unordered_map<pair<int,int>,double,pairhash>();
-						Nmedoids = 0;
-						for(vector<unordered_map<int,vector<LocalStateNode> > >::iterator medoids_it = medoidsTree.begin(); medoids_it != medoidsTree.end(); medoids_it++){
-							// Outer loop over sets of medoids
-							Nmedoids += medoids_it->size();
-							for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
-								// Inner loop over each set of medoids
-								maxNstatesInMedoid = max(maxNstatesInMedoid,static_cast<int>(medoid_it->second.size()));
-							}
-						}
-			
-						// Perform the lumping and update stateNodes
-						performLumping(medoidsTree);
-						Nlumpings = NPstateNodes - Nmedoids;
+
 			
 					}
-					else if(NPstateNodes == 0){
-						NphysDanglings++;
+					else{
+
+						if(NPstateNodes == 0)
+							NphysDanglings++;
+
+						double postLumpingEntropyRate = calcEntropyRate(physNode);
+
+						string output = "\n-->Lumped " + to_string(Nlumpings) + " state nodes (from " + to_string(max(NPstateNodes,1)) + " to " + to_string(Nmedoids) + " with max " + to_string(maxNstatesInMedoid) + " lumped states and total divergence " + to_string(sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates) in physical node " + to_string(PhysNodeNr) + "/" + to_string(NphysNodes) + ".               ";
+						cout << output;
 					}
 					
-					double postLumpingEntropyRate = calcEntropyRate(physNode);
-
-					string output = "\n-->Lumped " + to_string(Nlumpings) + " state nodes (from " + to_string(max(NPstateNodes,1)) + " to " + to_string(Nmedoids) + " with max " + to_string(maxNstatesInMedoid) + " lumped states and total divergence " + to_string(sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates) in physical node " + to_string(i) + "/" + to_string(NphysNodes) + ".               ";
-					cout << output;
 				} // end of #pragma omp task
 			} // end of for loop
 		} // end of #pragma omp single nowait
@@ -995,6 +1056,10 @@ void StateNetwork::lumpStateNodes(){
 		}
 	}
 
+	#ifdef _OPENMP
+	for (int i=0; i<NphysNodes; i++)
+    omp_destroy_lock(&(lock[i]));
+  #endif
 }
 
 bool StateNetwork::readLines(string &line,vector<string> &lines){
