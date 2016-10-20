@@ -728,12 +728,41 @@ double StateNetwork::findCenters(vector<unordered_map<int,vector<LocalStateNode>
 	
 				double minDivSumInMedoid = bignum*NstatesInMedoid; // Because minDiv is set to bignum for all state nodes
 				int Ncenters = 0;
-				
+
+				// // Find Nclu random centers
+				// while(Ncenters < Nclu){
+
+				// 	// Find random state node in physical node as first center
+				// 	uniform_int_distribution<int> randInt(Ncenters,NstatesInMedoid-1);
+				// 	int newCenterIndex = randInt(mtRand);
+				// 	minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
+				// 	medoid[newCenterIndex].minDiv = 0.0;
+				// 	medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
+		
+				// 	// Put the center in first non-center position (Ncenters = 0) by swapping elements
+				// 	swap(medoid[Ncenters],medoid[newCenterIndex]);
+				// 	Ncenters++;
+
+				// 	StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
+				// 	for(int i=Ncenters;i<NstatesInMedoid;i++){
+				// 		double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
+				// 		if(div < medoid[i].minDiv){
+				// 			// Found new minimum divergence to center
+				// 			minDivSumInMedoid -= medoid[i].minDiv;
+				// 			minDivSumInMedoid += div;
+				// 			medoid[i].minDiv = div;
+				// 			medoid[i].minCenterStateNode = lastClusterStateNode;
+				// 		}
+				// 	}					
+
+				// }
+
 				// Find random state node in physical node as first center
 				uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
 				int firstCenterIndex = randInt(mtRand);
 				medoid[firstCenterIndex].minCenterStateNode = medoid[firstCenterIndex].stateNode;
 				minDivSumInMedoid -= medoid[firstCenterIndex].minDiv;
+				medoid[firstCenterIndex].minDiv = 0.0;
 	
 				// Put the center in first non-center position (Ncenters = 0) by swapping elements
 				swap(medoid[Ncenters],medoid[firstCenterIndex]);
@@ -767,8 +796,9 @@ double StateNetwork::findCenters(vector<unordered_map<int,vector<LocalStateNode>
 						}
 					}
 	
-					medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
 					minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
+					medoid[newCenterIndex].minDiv = 0.0;
+					medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
 					// Put the center in first non-center position by swapping elements
 					swap(medoid[Ncenters],medoid[newCenterIndex]);
 					Ncenters++;
@@ -891,7 +921,6 @@ void StateNetwork::lumpStateNodes(){
 	vector<vector<unordered_map<int,vector<LocalStateNode> > > > bestMedoidsTree(NphysNodes);
 
 	// To be able to parallelize loop over physical nodes
-	int Nattempts = 5;
 	int NtotAttempts = 0;
 	int PhysNodeNr = 0;
 	unordered_map<int,int> attemptToPhysNodeNrMap;

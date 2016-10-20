@@ -40,3 +40,7 @@ profile
 *.net_tmplinks
 
 *.net_tmpstates
+
+tests.txt
+
+.DS_Store
