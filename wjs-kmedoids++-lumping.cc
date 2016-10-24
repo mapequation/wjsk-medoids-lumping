@@ -20,7 +20,7 @@ int main(int argc,char *argv[]){
   cout << endl;
 
   // Parse command input
-  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [-l <number of hierarchical levels>] [--tune] [--batchoutput] input_state_network.net output_state_network.net\n";
+  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [-d <number of clusters in each division (>= 2)>] [--tune] [--batchoutput] input_state_network.net output_state_network.net\n";
   if( argc == 1 ){
     cout << CALL_SYNTAX;
     exit(-1);
@@ -31,8 +31,8 @@ int main(int argc,char *argv[]){
   string outFileName;
 
   int argNr = 1;
-  int Nlevels = 1;
-  int NfinalClu = 100;
+  unsigned int NfinalClu = 100;
+  unsigned int NsplitClu = 2;
   int Nattempts = 1;
   bool batchOutput = false;
   bool tune = false;
@@ -64,9 +64,14 @@ int main(int argc,char *argv[]){
       NfinalClu = atoi(argv[argNr]);
       argNr++;
     }
-    else if(to_string(argv[argNr]) == "-l"){
+    else if(to_string(argv[argNr]) == "-d"){
       argNr++;
-      Nlevels = atoi(argv[argNr]);
+      NsplitClu = atoi(argv[argNr]);
+      if(NsplitClu < 2){
+        cout << "Command error: -d must be integer larger or equal to 2." << endl;
+        cout << CALL_SYNTAX;
+        exit(-1);
+      }
       argNr++;
     }
     else{
@@ -84,35 +89,20 @@ int main(int argc,char *argv[]){
     }
 
   }
-
-  vector<int> NcluVec = vector<int>(Nlevels);
   
   cout << "Setup:" << endl;
   cout << "-->Using seed: " << seed << endl;
-  cout << "-->Will lump state nodes into (at most) number of clusters per physical node: " << NfinalClu << endl;
-  cout << "-->Will get there in the number of hierarchical levels: " << Nlevels << endl;
+  cout << "-->Will lump state nodes into number of clusters per physical node: " << NfinalClu << endl;
+  cout << "-->Will iteratively divide worst cluster into number of clusters: " << NsplitClu << endl;
   cout << "-->Will make number of attempts: " << Nattempts << endl;
-  cout << "-->Will multiply the number of clusters in each hierarchical level by factors: ";
-  int N = NfinalClu;
-  int actualNfinalClu = 1;
-  for(int i=Nlevels;i > 0;i--){
-    int multiplier = static_cast<int>(0.5 + pow(1.0*N,1.0/i));
-    cout << multiplier << " ";
-    actualNfinalClu *= multiplier;
-    N /= multiplier;
-    NcluVec[Nlevels-i] = multiplier;
-  }
-  cout << "(" << actualNfinalClu << ")" << endl;
   if(tune)
-    cout << "-->Will iteratively tune medoids in deepest hierarchical level (slowest)." << endl;
+    cout << "-->Will tune medoids for bestter accuracy." << endl;
   else
-    cout << "-->Will not iteratively tune medoids for better accuracy (fastest)." << endl;
+    cout << "-->Will not tune medoids for better accuracy." << endl;
   cout << "-->Will read state network from file: " << inFileName << endl;
   cout << "-->Will write processed state network to file: " << outFileName << endl;
 
-  mt19937 mtRand(seed);
-
-  StateNetwork statenetwork(inFileName,outFileName,NfinalClu,Nlevels,NcluVec,Nattempts,tune,batchOutput,mtRand);
+  StateNetwork statenetwork(inFileName,outFileName,NfinalClu,NsplitClu,Nattempts,tune,batchOutput,seed);
 
   int NprocessedBatches = 0;
   while(statenetwork.loadStateNetworkBatch()){ // NprocessedBatches < 5 &&

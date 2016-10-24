@@ -100,6 +100,30 @@ LocalStateNode::LocalStateNode(int stateid){
 	stateId = stateid;
 }
 
+typedef multimap< double, vector<LocalStateNode>, greater<double> > SortedMedoids;
+
+class Medoids{
+public:
+
+	Medoids();
+	unsigned int maxNstatesInMedoid = 0;
+	double sumMinDiv = 0.0;
+	SortedMedoids sortedMedoids;
+};
+
+Medoids::Medoids(){
+};
+
+// struct CompareMedoids {
+//   bool operator ()(const Medoid& m1, const Medoid& m2) const { 
+//     return m1.first < m2.first;
+//   }
+// };
+
+// bool cmpMedoids(const Medoid& m1, const Medoid& m2){ 
+// 	return m1.first < m2.first;
+// };
+
 class PhysNode{
 public:
 	PhysNode();
@@ -117,12 +141,14 @@ private:
 	double calcEntropyRate(PhysNode &physNode);
 	double wJSdiv(int stateId1, int stateId2);
 	double wJSdiv(StateNode &stateNode1, StateNode &stateNode2);
-	double findCenters(vector<unordered_map<int,vector<LocalStateNode> > > &medoidsTree);
-	double updateCenters(vector<unordered_map<int,vector<LocalStateNode> > > &medoidsTree);
-	void performLumping(vector<unordered_map<int,vector<LocalStateNode> > > &medoidsTree);
+	void findCenters(Medoids &medoids);
+	double updateCenters(Medoids &medoids);
+	void performLumping(Medoids &medoids);
 	bool readLines(string &line,vector<string> &lines);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line,int &batchNr);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line);
+	int randInt(int from, int to);
+	double randDouble(double to);
 
 	// For all batches
 	string inFileName;
@@ -134,7 +160,7 @@ private:
 	bool batchOutput = false;
 	int Nattempts = 1;
 	bool tune = false;
-	mt19937 &mtRand;
+	vector<mt19937> mtRands;
 	ifstream ifs;
   string line;
   double totWeight = 0.0;
@@ -157,10 +183,8 @@ private:
 	int Ndanglings = 0;
 	int Ncontexts = 0;
 	int NphysDanglings = 0;
-	int NfinalClu;
-	int Nlevels;
-	vector<int> NcluVec;
-	int Nclu;
+	unsigned int NfinalClu;
+	unsigned int NsplitClu;
 	// unordered_map<pair<int,int>,double,pairhash> cachedWJSdiv;
 	unordered_map<int,int> stateNodeIdMapping;
 	unordered_map<int,int> stateToPhysNodeMapping;
@@ -168,7 +192,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> &NcluVec,int Nattempts,bool tune,bool batchOutput,mt19937 &mtRand); 
+	StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,bool tune,bool batchOutput,int seed); 
 	void lumpStateNodes();
 	void loadNodeMapping();
 	bool loadStateNetworkBatch();
@@ -182,11 +206,9 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,int NfinalClu,int Nlevels,vector<int> &NcluVec,int Nattempts,bool tune,bool batchOutput,mt19937 &mtRand) : mtRand(mtRand), NcluVec(NcluVec){
+StateNetwork::StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,bool tune,bool batchOutput,int seed){
 	this->NfinalClu = NfinalClu;
-	this->Nlevels = Nlevels;
-	this->NcluVec = NcluVec;
-	Nclu = NcluVec[0];
+	this->NsplitClu = NsplitClu;
 	this->Nattempts = Nattempts;
 	this->tune = tune;
 	this->batchOutput = batchOutput;
@@ -196,7 +218,12 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,int NfinalClu,in
 	this->tmpOutFileNameStates = string(outFileName).append("_tmpstates");
 	this->tmpOutFileNameLinks = string(outFileName).append("_tmplinks");
 	this->tmpOutFileNameContexts = string(outFileName).append("_tmpcontexts");
-	
+
+	int threads = max(1, omp_get_max_threads());
+	for(int i = 0; i < threads; i++){
+    mtRands.push_back(mt19937(seed+1));
+  }
+
 	// Open state network for building state node to physical node mapping
 	ifs.open(inFileName.c_str());
 	if(!ifs){
@@ -212,7 +239,19 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,int NfinalClu,in
 
 }
 
+int StateNetwork::randInt(int from, int to){
 
+	uniform_int_distribution<int> rInt(from,to);
+	return rInt(mtRands[omp_get_thread_num()]);
+
+}
+
+double StateNetwork::randDouble(double to){
+
+	uniform_real_distribution<double> rDouble(0.0,to);
+	return rDouble(mtRands[omp_get_thread_num()]);
+
+}
 
 double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 
@@ -503,400 +542,413 @@ double StateNetwork::calcEntropyRate(PhysNode &physNode){
 
 }
 
-double StateNetwork::updateCenters(vector<unordered_map<int,vector<LocalStateNode> > > &medoidsTree){
+double StateNetwork::updateCenters(Medoids &medoids){
 	
 	double sumMinDiv = 0.0;
 
-	// Loop over all medoids to find new centers
-	for(vector<unordered_map<int,vector<LocalStateNode> > >::iterator medoids_it = medoidsTree.begin(); medoids_it != medoidsTree.end(); medoids_it++){
-		// Outer loop over sets of medoids
-		int NmedoidsInSet = medoids_it->size();
-		int NPstateNodesInSet = 0;
-		for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
-			// Inner loop over each set of medoids
-			vector<LocalStateNode> &medoid = medoid_it->second;
-			int NstatesInMedoid = medoid.size();
-			NPstateNodesInSet += NstatesInMedoid;
-			double minDivSumInMedoid = bignum*NstatesInMedoid;
-			int minDivSumInMedoidIndex = 0;
+	// // Loop over all medoids to find new centers
+	// for(vector<unordered_map<int,vector<LocalStateNode> > >::iterator medoids_it = medoidsTree.begin(); medoids_it != medoidsTree.end(); medoids_it++){
+	// 	// Outer loop over sets of medoids
+	// 	int NmedoidsInSet = medoids_it->size();
+	// 	int NPstateNodesInSet = 0;
+	// 	for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
+	// 		// Inner loop over each set of medoids
+	// 		vector<LocalStateNode> &medoid = medoid_it->second;
+	// 		int NstatesInMedoid = medoid.size();
+	// 		NPstateNodesInSet += NstatesInMedoid;
+	// 		double minDivSumInMedoid = bignum*NstatesInMedoid;
+	// 		int minDivSumInMedoidIndex = 0;
 			
 	
-			// Find new center with pivot method
-			if(NstatesInMedoid > 50){
+	// 		// Find new center with pivot method
+	// 		if(NstatesInMedoid > 50){
 	
-				// Find random state node to identify remote state node S1
-				uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
-				int randomStateInMedoidIndex = randInt(mtRand);
-				double maxDiv = 0.0;
-				int S1MedoidIndex = randomStateInMedoidIndex;
-				for(int j=0;j<NstatesInMedoid;j++){
-					double div = wJSdiv(*medoid[randomStateInMedoidIndex].stateNode,*medoid[j].stateNode);
-					medoid[j].minDiv = div;
-					if(div > maxDiv){
-						maxDiv = div;
-						S1MedoidIndex = j;
-					}
-				}
-				// Calculate distances to S1 and find S2
-				int S2MedoidIndex = S1MedoidIndex;
-				maxDiv = 0.0;
-				for(int j=0;j<NstatesInMedoid;j++){
-					double div = wJSdiv(*medoid[S1MedoidIndex].stateNode,*medoid[j].stateNode);
-					medoid[j].minDiv = div;
-					if(div > maxDiv){
-						maxDiv = div;
-						S2MedoidIndex = j;
-					}
-				}
-				// Calculate distances to S2 and projected distances to S1
-				double divS1toS2squared = pow(maxDiv,2.0);
-				vector<double> projDivToS1;
-				projDivToS1.reserve(NstatesInMedoid);
+	// 			// Find random state node to identify remote state node S1
+	// 			uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
+	// 			int randomStateInMedoidIndex = randInt(mtRands[omp_get_thread_num()]);
+	// 			double maxDiv = 0.0;
+	// 			int S1MedoidIndex = randomStateInMedoidIndex;
+	// 			for(int j=0;j<NstatesInMedoid;j++){
+	// 				double div = wJSdiv(*medoid[randomStateInMedoidIndex].stateNode,*medoid[j].stateNode);
+	// 				medoid[j].minDiv = div;
+	// 				if(div > maxDiv){
+	// 					maxDiv = div;
+	// 					S1MedoidIndex = j;
+	// 				}
+	// 			}
+	// 			// Calculate distances to S1 and find S2
+	// 			int S2MedoidIndex = S1MedoidIndex;
+	// 			maxDiv = 0.0;
+	// 			for(int j=0;j<NstatesInMedoid;j++){
+	// 				double div = wJSdiv(*medoid[S1MedoidIndex].stateNode,*medoid[j].stateNode);
+	// 				medoid[j].minDiv = div;
+	// 				if(div > maxDiv){
+	// 					maxDiv = div;
+	// 					S2MedoidIndex = j;
+	// 				}
+	// 			}
+	// 			// Calculate distances to S2 and projected distances to S1
+	// 			double divS1toS2squared = pow(maxDiv,2.0);
+	// 			vector<double> projDivToS1;
+	// 			projDivToS1.reserve(NstatesInMedoid);
 	
-				for(int j=0;j<NstatesInMedoid;j++){
-					double div = wJSdiv(*medoid[S2MedoidIndex].stateNode,*medoid[j].stateNode);
-					medoid[j].minDiv2 = div;
-					double divStoS2squared = pow(div,2.0);
-					double divStoS1squared = pow(medoid[j].minDiv,2.0);
+	// 			for(int j=0;j<NstatesInMedoid;j++){
+	// 				double div = wJSdiv(*medoid[S2MedoidIndex].stateNode,*medoid[j].stateNode);
+	// 				medoid[j].minDiv2 = div;
+	// 				double divStoS2squared = pow(div,2.0);
+	// 				double divStoS1squared = pow(medoid[j].minDiv,2.0);
 	
-					projDivToS1.push_back(0.5*(divStoS1squared + divS1toS2squared - divStoS2squared)/divS1toS2squared);
-				}
+	// 				projDivToS1.push_back(0.5*(divStoS1squared + divS1toS2squared - divStoS2squared)/divS1toS2squared);
+	// 			}
 	
-				// Find median projected distance to S1 on the line from S1 to S2
-				int n = projDivToS1.size()/2;
-				nth_element(projDivToS1.begin(), projDivToS1.begin()+n, projDivToS1.end());
-				double projMedianDiv = projDivToS1[n];
+	// 			// Find median projected distance to S1 on the line from S1 to S2
+	// 			int n = projDivToS1.size()/2;
+	// 			nth_element(projDivToS1.begin(), projDivToS1.begin()+n, projDivToS1.end());
+	// 			double projMedianDiv = projDivToS1[n];
 	
-				// Find state node clostest to median projected distance to S1 on the line from S1 to S2
-				for(int j=0;j<NstatesInMedoid;j++){
-					double DivSumInMedoid = fabs(medoid[j].minDiv-projMedianDiv) + fabs(medoid[j].minDiv2-(medoid[S1MedoidIndex].minDiv2-projMedianDiv));
-					if(DivSumInMedoid < minDivSumInMedoid){
-						minDivSumInMedoid = DivSumInMedoid;
-						minDivSumInMedoidIndex = j;
-					}
-				}
+	// 			// Find state node clostest to median projected distance to S1 on the line from S1 to S2
+	// 			for(int j=0;j<NstatesInMedoid;j++){
+	// 				double DivSumInMedoid = fabs(medoid[j].minDiv-projMedianDiv) + fabs(medoid[j].minDiv2-(medoid[S1MedoidIndex].minDiv2-projMedianDiv));
+	// 				if(DivSumInMedoid < minDivSumInMedoid){
+	// 					minDivSumInMedoid = DivSumInMedoid;
+	// 					minDivSumInMedoidIndex = j;
+	// 				}
+	// 			}
 	
+	// 		}
+	// 		else{ 
+	
+	// 			// Find total divergence for each state node in medoid
+	// 			for(int j=0;j<NstatesInMedoid;j++)
+	// 				medoid[j].minDiv = 0.0;
+	// 			for(int j=0;j<NstatesInMedoid;j++){
+	// 				for(int k=j+1;k<NstatesInMedoid;k++){
+	// 					double div = wJSdiv(*medoid[j].stateNode,*medoid[k].stateNode);
+	// 					medoid[j].minDiv += div;
+	// 					medoid[k].minDiv += div;
+	// 				}
+	// 			}
+	// 			for(int j=0;j<NstatesInMedoid;j++){		
+	// 				if(medoid[j].minDiv < minDivSumInMedoid){
+	// 					minDivSumInMedoid = medoid[j].minDiv;
+	// 					minDivSumInMedoidIndex = j;
+	// 				}
+	// 			}
+	
+	// 		}
+	
+	
+	// 		// // Find total divergence for random subset of state nodes in medoid
+	// 		// if(NrandStates > 0 && NstatesInMedoid > NrandStates){
+	// 		// 	int NrandStatesGenerated = 0;
+	// 		// 	vector<int> randStates = vector<int>(NrandStates);
+	// 		// 	vector<int> randStateSpace = vector<int>(NstatesInMedoid);
+	// 		// 	for(int i=0;i<NstatesInMedoid;i++)
+	// 		// 		randStateSpace[i] = i;
+	// 		// 	for(int i=0;i<NrandStates;i++){
+	// 		// 		uniform_int_distribution<int> randInt(0,NstatesInMedoid-NrandStatesGenerated-1);
+	// 		// 		int randElement = randInt(mtRands[omp_get_thread_num()]);
+	// 		// 		randStates[NrandStatesGenerated] = randStateSpace[randElement];
+	// 		// 		NrandStatesGenerated++;
+	// 		// 		swap(randStateSpace[randElement],randStateSpace[NstatesInMedoid-NrandStatesGenerated-1]);
+	// 		// 	}
+	// 		// 	for(int jre=0;jre<NrandStates;jre++){
+	// 		// 		medoid[randStates[jre]].minDiv = 0.0;
+	// 		// 	}
+	// 		// 	for(int jre=0;jre<NrandStates;jre++){
+	// 		// 		int j = randStates[jre];
+	// 		// 		for(int kre=jre+1;kre<NrandStates;kre++){
+	// 		// 			int k = randStates[kre];
+	// 		// 			double div = wJSdiv(*medoid[j].stateNode,*medoid[k].stateNode);
+	// 		// 			medoid[j].minDiv += div;
+	// 		// 			medoid[k].minDiv += div;
+	// 		// 		}
+	// 		// 	}
+	// 		// 	for(int jre=0;jre<NrandStates;jre++){	
+	// 		// 		int j = randStates[jre];
+	// 		// 		if(medoid[j].minDiv < minDivSumInMedoid){
+	// 		// 			minDivSumInMedoid = medoid[j].minDiv;
+	// 		// 			minDivSumInMedoidIndex = j;
+	// 		// 		}
+	// 		// 	}
+	// 		// }
+	// 		// else{
+	// 		// 	// Find total divergence for each state node in medoid
+	// 		// 	for(int j=0;j<NstatesInMedoid;j++)
+	// 		// 		medoid[j].minDiv = 0.0;
+	// 		// 	for(int j=0;j<NstatesInMedoid;j++){
+	// 		// 		for(int k=j+1;k<NstatesInMedoid;k++){
+	// 		// 			double div = wJSdiv(*medoid[j].stateNode,*medoid[k].stateNode);
+	// 		// 			medoid[j].minDiv += div;
+	// 		// 			medoid[k].minDiv += div;
+	// 		// 		}
+	// 		// 	}
+	// 		// 	for(int j=0;j<NstatesInMedoid;j++){		
+	// 		// 		if(medoid[j].minDiv < minDivSumInMedoid){
+	// 		// 			minDivSumInMedoid = medoid[j].minDiv;
+	// 		// 			minDivSumInMedoidIndex = j;
+	// 		// 		}
+	// 		// 	}
+	// 		// }
+	
+	// 		// Update localStateNodes to have minCenterStateNode point to the global StateNodes and place the center first in medoid.
+	// 		StateNode *newCenterStateNode = medoid[minDivSumInMedoidIndex].stateNode;
+	// 		for(int j=0;j<NstatesInMedoid;j++){
+	// 			medoid[j].minCenterStateNode = newCenterStateNode;
+	// 		}
+	// 		swap(medoid[0],medoid[minDivSumInMedoidIndex]); // Swap such that the first index in medoid is center
+	// 		medoid[0].minDiv = bignum; // Reset for next round
+	// 	}
+
+	// 	// Move to medoid associated with closest center
+	// 	double sumMinDivInSet = bignum*(NPstateNodesInSet-NmedoidsInSet);
+		
+	// 	// Updated centers first in updated medoids
+	// 	unordered_map<int,vector<LocalStateNode> > updatedMedoids;
+	// 	for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
+	// 		updatedMedoids[medoid_it->second[0].stateId].push_back(medoid_it->second[0]);
+	// 	}
+	
+	// 	// Find closest center for all state nodes in physical node
+	// 	for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
+	// 		vector<LocalStateNode> &medoid = medoid_it->second;
+	// 		int NstatesInMedoid = medoid.size();
+	// 		for(int j=1;j<NstatesInMedoid;j++){ // Start at 1 because first index in medoid is center and already taken care of
+	// 			medoid[j].minDiv = bignum;
+	// 			for(unordered_map<int,vector<LocalStateNode> >::iterator updatedMedoid_it = updatedMedoids.begin(); updatedMedoid_it != updatedMedoids.end(); updatedMedoid_it++){
+	// 				double div = wJSdiv(*medoid[j].stateNode,*updatedMedoid_it->second[0].stateNode);
+	// 				if(div < medoid[j].minDiv){
+	// 					sumMinDivInSet -= medoid[j].minDiv;
+	// 					medoid[j].minDiv = div;
+	// 					sumMinDivInSet += div;
+	// 					medoid[j].minCenterStateNode = updatedMedoid_it->second[0].stateNode;
+	// 				}
+	// 			}	
+	// 			// Add to updated medoids in medoid with closest center
+	// 			medoid[j].minDiv = bignum; // Reset for next run
+	// 			updatedMedoids[medoid[j].minCenterStateNode->stateId].push_back(medoid[j]);
+	// 		}
+	// 	}
+	// 	sumMinDiv += sumMinDivInSet;
+	// 	swap((*medoids_it),updatedMedoids);
+
+	// }
+
+	return sumMinDiv;
+
+}
+
+void StateNetwork::findCenters(Medoids &medoids){
+	// Modifies the order of medoid(s) such that the fist NsplitClu will be the centers.
+	// Also, all elements will contain the stateId it is closest to.
+
+	vector<LocalStateNode> &medoid = medoids.sortedMedoids.begin()->second;
+	unsigned int NstatesInMedoid = medoid.size();
+	if(NstatesInMedoid <= NsplitClu){
+		// All state nodes in medoid form their own medoids in the updated medoids
+		for(unsigned int i=0;i<NstatesInMedoid;i++){
+			medoid[i].minDiv = 0.0;
+			medoid[i].minCenterStateNode = medoid[i].stateNode;
+		}
+	}
+	else{
+		// Find NsplitClu < NstatesInMedoid new centers in updated medoids
+		double minDivSumInMedoid = bignum*NstatesInMedoid;
+		unsigned int Ncenters = 0;
+		// // Find NsplitClu random centers
+		// while(Ncenters < NsplitClu)
+		// 	// Find random state node in physical node as first center
+		// 	uniform_int_distribution<int> randInt(Ncenters,NstatesInMedoid-1);
+		// 	int newCenterIndex = randInt(mtRands[omp_get_thread_num()]);
+		// 	minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
+		// 	medoid[newCenterIndex].minDiv = 0.0;
+		// 	medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
+
+		// 	// Put the center in first non-center position (Ncenters = 0) by swapping elements
+		// 	swap(medoid[Ncenters],medoid[newCenterIndex]);
+		// 	Ncenters++
+		// 	StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
+		// 	for(int i=Ncenters;i<NstatesInMedoid;i++){
+		// 		double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
+		// 		if(div < medoid[i].minDiv){
+		// 			// Found new minimum divergence to center
+		// 			minDivSumInMedoid -= medoid[i].minDiv;
+		// 			minDivSumInMedoid += div;
+		// 			medoid[i].minDiv = div;
+		// 			medoid[i].minCenterStateNode = lastClusterStateNode;
+		// 		}
+		// 	}				
+		// 
+		// Find random state node in physical node as first center
+		// uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
+		// int firstCenterIndex = randInt(mtRands[omp_get_thread_num()]);
+		int firstCenterIndex = randInt(0,NstatesInMedoid-1);
+		
+		// ************ Begin find state node proportional to distance from random node
+		StateNode *firstClusterStateNode = medoid[firstCenterIndex].stateNode;
+		vector<double> firstMinDiv(NstatesInMedoid);
+		double sumFirstMinDiv = 0.0;
+		for(unsigned int i=0;i<NstatesInMedoid;i++){
+			double div = wJSdiv(*medoid[i].stateNode,*firstClusterStateNode);
+			firstMinDiv[i] = div;
+			sumFirstMinDiv += div;
+		}
+		// Pick new center proportional to minimum divergence
+		// uniform_real_distribution<double> randDouble(0.0,sumFirstMinDiv);
+		// double randMinDivSum = randDouble(mtRands[omp_get_thread_num()]);
+		double randMinDivSum = randDouble(sumFirstMinDiv);
+		double minDivSum = 0.0;
+		for(unsigned int i=0;i<NstatesInMedoid;i++){
+			minDivSum += firstMinDiv[i];
+			if(minDivSum > randMinDivSum){
+				firstCenterIndex = i;
+				break;
 			}
-			else{ 
+		}
+		firstMinDiv = vector<double>(0);
+		// ************* End find state node proportional to distance from random node
+
+		medoid[firstCenterIndex].minCenterStateNode = medoid[firstCenterIndex].stateNode;
+		minDivSumInMedoid -= medoid[firstCenterIndex].minDiv;
+		medoid[firstCenterIndex].minDiv = 0.0;
+		// Put the center in first non-center position (Ncenters = 0) by swapping elements
+		swap(medoid[Ncenters],medoid[firstCenterIndex]);
+		Ncenters++;
 	
-				// Find total divergence for each state node in medoid
-				for(int j=0;j<NstatesInMedoid;j++)
-					medoid[j].minDiv = 0.0;
-				for(int j=0;j<NstatesInMedoid;j++){
-					for(int k=j+1;k<NstatesInMedoid;k++){
-						double div = wJSdiv(*medoid[j].stateNode,*medoid[k].stateNode);
-						medoid[j].minDiv += div;
-						medoid[k].minDiv += div;
-					}
+	
+		// Find NsplitClu-1 more centers based on the k++ algorithm
+		while(Ncenters < NsplitClu){
+			StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
+			for(unsigned int i=Ncenters;i<NstatesInMedoid;i++){
+				double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
+				if(div < medoid[i].minDiv){
+					// Found new minimum divergence to center
+					minDivSumInMedoid -= medoid[i].minDiv;
+					medoid[i].minDiv = div;
+					minDivSumInMedoid += medoid[i].minDiv;
+					medoid[i].minCenterStateNode = lastClusterStateNode;
 				}
-				for(int j=0;j<NstatesInMedoid;j++){		
-					if(medoid[j].minDiv < minDivSumInMedoid){
-						minDivSumInMedoid = medoid[j].minDiv;
-						minDivSumInMedoidIndex = j;
-					}
+			}
+			// Pick new center proportional to minimum divergence
+			// uniform_real_distribution<double> randDouble(0.0,minDivSumInMedoid);
+			// double randMinDivSum = randDouble(mtRands[omp_get_thread_num()]);
+			double randMinDivSum = randDouble(minDivSumInMedoid);
+			double minDivSum = 0.0;
+			unsigned int newCenterIndex = Ncenters;
+			for(unsigned int i=Ncenters;i<NstatesInMedoid;i++){
+				minDivSum += medoid[i].minDiv;
+				if(minDivSum > randMinDivSum){
+					newCenterIndex = i;
+					break;
 				}
-	
 			}
+			minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
+			medoid[newCenterIndex].minDiv = 0.0;
+			medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
+			// Put the center in first non-center position by swapping elements
+			swap(medoid[Ncenters],medoid[newCenterIndex]);
+			Ncenters++;
+		}
 	
-	
-			// // Find total divergence for random subset of state nodes in medoid
-			// if(NrandStates > 0 && NstatesInMedoid > NrandStates){
-			// 	int NrandStatesGenerated = 0;
-			// 	vector<int> randStates = vector<int>(NrandStates);
-			// 	vector<int> randStateSpace = vector<int>(NstatesInMedoid);
-			// 	for(int i=0;i<NstatesInMedoid;i++)
-			// 		randStateSpace[i] = i;
-			// 	for(int i=0;i<NrandStates;i++){
-			// 		uniform_int_distribution<int> randInt(0,NstatesInMedoid-NrandStatesGenerated-1);
-			// 		int randElement = randInt(mtRand);
-			// 		randStates[NrandStatesGenerated] = randStateSpace[randElement];
-			// 		NrandStatesGenerated++;
-			// 		swap(randStateSpace[randElement],randStateSpace[NstatesInMedoid-NrandStatesGenerated-1]);
-			// 	}
-			// 	for(int jre=0;jre<NrandStates;jre++){
-			// 		medoid[randStates[jre]].minDiv = 0.0;
-			// 	}
-			// 	for(int jre=0;jre<NrandStates;jre++){
-			// 		int j = randStates[jre];
-			// 		for(int kre=jre+1;kre<NrandStates;kre++){
-			// 			int k = randStates[kre];
-			// 			double div = wJSdiv(*medoid[j].stateNode,*medoid[k].stateNode);
-			// 			medoid[j].minDiv += div;
-			// 			medoid[k].minDiv += div;
-			// 		}
-			// 	}
-			// 	for(int jre=0;jre<NrandStates;jre++){	
-			// 		int j = randStates[jre];
-			// 		if(medoid[j].minDiv < minDivSumInMedoid){
-			// 			minDivSumInMedoid = medoid[j].minDiv;
-			// 			minDivSumInMedoidIndex = j;
-			// 		}
-			// 	}
-			// }
-			// else{
-			// 	// Find total divergence for each state node in medoid
-			// 	for(int j=0;j<NstatesInMedoid;j++)
-			// 		medoid[j].minDiv = 0.0;
-			// 	for(int j=0;j<NstatesInMedoid;j++){
-			// 		for(int k=j+1;k<NstatesInMedoid;k++){
-			// 			double div = wJSdiv(*medoid[j].stateNode,*medoid[k].stateNode);
-			// 			medoid[j].minDiv += div;
-			// 			medoid[k].minDiv += div;
-			// 		}
-			// 	}
-			// 	for(int j=0;j<NstatesInMedoid;j++){		
-			// 		if(medoid[j].minDiv < minDivSumInMedoid){
-			// 			minDivSumInMedoid = medoid[j].minDiv;
-			// 			minDivSumInMedoidIndex = j;
-			// 		}
-			// 	}
-			// }
-	
-			// Update localStateNodes to have minCenterStateNode point to the global StateNodes and place the center first in medoid.
-			StateNode *newCenterStateNode = medoid[minDivSumInMedoidIndex].stateNode;
-			for(int j=0;j<NstatesInMedoid;j++){
-				medoid[j].minCenterStateNode = newCenterStateNode;
+		// Check if last center gives minimum divergence for some state nodes
+		StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
+		for(unsigned int i=Ncenters;i<NstatesInMedoid;i++){
+			double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
+			if(div < medoid[i].minDiv){
+				// Found new minimum divergence to center
+				minDivSumInMedoid -= medoid[i].minDiv;
+				medoid[i].minDiv = div;
+				minDivSumInMedoid += medoid[i].minDiv;
+				medoid[i].minCenterStateNode = lastClusterStateNode;
 			}
-			swap(medoid[0],medoid[minDivSumInMedoidIndex]); // Swap such that the first index in medoid is center
-			medoid[0].minDiv = bignum; // Reset for next round
+			
 		}
 
-		// Move to medoid associated with closest center
-		double sumMinDivInSet = bignum*(NPstateNodesInSet-NmedoidsInSet);
-		
-		// Updated centers first in updated medoids
-		unordered_map<int,vector<LocalStateNode> > updatedMedoids;
-		for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
-			updatedMedoids[medoid_it->second[0].stateId].push_back(medoid_it->second[0]);
+	}
+			
+  // Identify new medoids
+	unordered_map<int,pair<double,vector<LocalStateNode> > > newMedoids;
+	unordered_map<int,pair<double,vector<LocalStateNode> > >::iterator newMedoids_it;
+
+	for(unsigned int i=0;i<NstatesInMedoid;i++){
+
+		int centerId = medoid[i].minCenterStateNode->stateId;
+		double minDiv = medoid[i].minDiv;
+		medoid[i].minDiv = bignum; // Reset for next iteration
+		newMedoids_it = newMedoids.find(centerId);
+
+		if(newMedoids_it == newMedoids.end()){
+			pair<double,vector<LocalStateNode> > newMedoid;
+			newMedoid.first = minDiv;
+			newMedoid.second.push_back(medoid[i]);
+			newMedoids.emplace(make_pair(centerId,newMedoid));
 		}
-	
-		// Find closest center for all state nodes in physical node
-		for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
-			vector<LocalStateNode> &medoid = medoid_it->second;
-			int NstatesInMedoid = medoid.size();
-			for(int j=1;j<NstatesInMedoid;j++){ // Start at 1 because first index in medoid is center and already taken care of
-				medoid[j].minDiv = bignum;
-				for(unordered_map<int,vector<LocalStateNode> >::iterator updatedMedoid_it = updatedMedoids.begin(); updatedMedoid_it != updatedMedoids.end(); updatedMedoid_it++){
-					double div = wJSdiv(*medoid[j].stateNode,*updatedMedoid_it->second[0].stateNode);
-					if(div < medoid[j].minDiv){
-						sumMinDivInSet -= medoid[j].minDiv;
-						medoid[j].minDiv = div;
-						sumMinDivInSet += div;
-						medoid[j].minCenterStateNode = updatedMedoid_it->second[0].stateNode;
-					}
-				}	
-				// Add to updated medoids in medoid with closest center
-				medoid[j].minDiv = bignum; // Reset for next run
-				updatedMedoids[medoid[j].minCenterStateNode->stateId].push_back(medoid[j]);
-			}
-		}
-		sumMinDiv += sumMinDivInSet;
-		swap((*medoids_it),updatedMedoids);
+		else{
+			newMedoids_it->second.first += minDiv;
+			newMedoids_it->second.second.push_back(medoid[i]);
+		} 
 
 	}
 
-	return sumMinDiv;
+	// Remove the split medoid
+	medoids.sumMinDiv -= medoids.sortedMedoids.begin()->first;
+	medoids.maxNstatesInMedoid = min(medoids.maxNstatesInMedoid,static_cast<unsigned int>(medoids.sortedMedoids.begin()->second.size()));
+	medoids.sortedMedoids.erase(medoids.sortedMedoids.begin());
+	
+	// Add the new medoids
+	for(newMedoids_it = newMedoids.begin(); newMedoids_it != newMedoids.end(); newMedoids_it++){
+		medoids.sumMinDiv += newMedoids_it->second.first;
+		medoids.maxNstatesInMedoid = max(medoids.maxNstatesInMedoid,static_cast<unsigned int>(newMedoids_it->second.second.size()));
+		medoids.sortedMedoids.insert(move(newMedoids_it->second));
+	} 
+
+	if(medoids.sortedMedoids.size() < NfinalClu)
+		findCenters(medoids);
 
 }
 
-double StateNetwork::findCenters(vector<unordered_map<int,vector<LocalStateNode> > > &medoidsTree){
-	// Modifies the order of medoid(s) such thar the fist Nclu will be the centers.
-	// Also, all elements will contain the stateId it is closest to.
-
-	vector<unordered_map<int,vector<LocalStateNode> > > updatedMedoidsTree;
-	double sumMinDiv = 0.0;
-
-	// Loop over all medoids to find new centers
-	for(vector<unordered_map<int,vector<LocalStateNode> > >::iterator medoids_it = medoidsTree.begin(); medoids_it != medoidsTree.end(); medoids_it++){
-		// Outer loop over sets of medoids
-		
-		for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
-			// Inner loop over each set of medoids
-
-			vector<LocalStateNode> &medoid = medoid_it->second;
-			int NstatesInMedoid = medoid.size();
-	
-			if(NstatesInMedoid <= Nclu){
-				// All state nodes in medoid form their own medoids in the updated medoids
-				for(int i=0;i<NstatesInMedoid;i++){
-					medoid[i].minCenterStateNode = medoid[i].stateNode;
-				}
-	
-			}
-			else{
-				// Find Nclu < NstatesInMedoid new centers in updated medoids
-	
-				double minDivSumInMedoid = bignum*NstatesInMedoid; // Because minDiv is set to bignum for all state nodes
-				int Ncenters = 0;
-
-				// // Find Nclu random centers
-				// while(Ncenters < Nclu){
-
-				// 	// Find random state node in physical node as first center
-				// 	uniform_int_distribution<int> randInt(Ncenters,NstatesInMedoid-1);
-				// 	int newCenterIndex = randInt(mtRand);
-				// 	minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
-				// 	medoid[newCenterIndex].minDiv = 0.0;
-				// 	medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
-		
-				// 	// Put the center in first non-center position (Ncenters = 0) by swapping elements
-				// 	swap(medoid[Ncenters],medoid[newCenterIndex]);
-				// 	Ncenters++;
-
-				// 	StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
-				// 	for(int i=Ncenters;i<NstatesInMedoid;i++){
-				// 		double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
-				// 		if(div < medoid[i].minDiv){
-				// 			// Found new minimum divergence to center
-				// 			minDivSumInMedoid -= medoid[i].minDiv;
-				// 			minDivSumInMedoid += div;
-				// 			medoid[i].minDiv = div;
-				// 			medoid[i].minCenterStateNode = lastClusterStateNode;
-				// 		}
-				// 	}					
-
-				// }
-
-				// Find random state node in physical node as first center
-				uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
-				int firstCenterIndex = randInt(mtRand);
-				medoid[firstCenterIndex].minCenterStateNode = medoid[firstCenterIndex].stateNode;
-				minDivSumInMedoid -= medoid[firstCenterIndex].minDiv;
-				medoid[firstCenterIndex].minDiv = 0.0;
-	
-				// Put the center in first non-center position (Ncenters = 0) by swapping elements
-				swap(medoid[Ncenters],medoid[firstCenterIndex]);
-				Ncenters++;
-			
-			
-				// Find Nclu-1 more centers based on the k++ algorithm
-				while(Ncenters < Nclu){
-	
-					StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
-					for(int i=Ncenters;i<NstatesInMedoid;i++){
-						double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
-						if(div < medoid[i].minDiv){
-							// Found new minimum divergence to center
-							minDivSumInMedoid -= medoid[i].minDiv;
-							minDivSumInMedoid += div;
-							medoid[i].minDiv = div;
-							medoid[i].minCenterStateNode = lastClusterStateNode;
-						}
-					}
-					// Pick new center proportional to minimum divergence
-					uniform_real_distribution<double> randDouble(0.0,minDivSumInMedoid);
-					double randMinDivSum = randDouble(mtRand);
-					double minDivSum = 0.0;
-					int newCenterIndex = Ncenters;
-					for(int i=Ncenters;i<NstatesInMedoid;i++){
-						minDivSum += medoid[i].minDiv;
-						if(minDivSum > randMinDivSum){
-							newCenterIndex = i;
-							break;
-						}
-					}
-	
-					minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
-					medoid[newCenterIndex].minDiv = 0.0;
-					medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
-					// Put the center in first non-center position by swapping elements
-					swap(medoid[Ncenters],medoid[newCenterIndex]);
-					Ncenters++;
-				}
-			
-				// Check if last center gives minimum divergence for some state nodes
-				StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
-				for(int i=Ncenters;i<NstatesInMedoid;i++){
-					double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
-					if(div < medoid[i].minDiv){
-						// Found new minimum divergence to center
-						minDivSumInMedoid -= medoid[i].minDiv;
-						minDivSumInMedoid += div;
-						medoid[i].minDiv = div;
-						medoid[i].minCenterStateNode = lastClusterStateNode;
-					}
-					
-				}
-		
-				sumMinDiv += minDivSumInMedoid;
-	
-			}
-	
-  	}
-
-
-  	for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
-			
-  		// Updated centers first in updated medoids
-			unordered_map<int,vector<LocalStateNode> > updatedMedoids;
-
-			vector<LocalStateNode> &medoid = medoid_it->second;
-			int NstatesInMedoid = medoid.size();
-
-			for(int i=0;i<NstatesInMedoid;i++){
-				medoid[i].minDiv = bignum; // Reset for next iteration
-				updatedMedoids[medoid[i].minCenterStateNode->stateId].push_back(medoid[i]);
-			}
-
-			// swap(updatedMedoids,(*medoids_it));
-  		updatedMedoidsTree.push_back(move(updatedMedoids));
-
-  	}
-
-  }
-
-  swap(updatedMedoidsTree,medoidsTree);
-
-	return sumMinDiv;
-
-}
-
-void StateNetwork::performLumping(vector<unordered_map<int,vector<LocalStateNode> > > &medoidsTree){
+void StateNetwork::performLumping(Medoids &medoids){
 
 // int NPstateNodes = localStateNodes[0].size();
 	// Update stateNodes to reflect the lumping
 
 	// // Validation
 	// unordered_set<int> c;
-	// for(int i=0;i<Nclu;i++)
+	// for(int i=0;i<NsplitClu;i++)
 	// 	c.insert(localStateNodes[i].stateId);
-	// for(int i=Nclu;i<NPstateNodes;i++){
+	// for(int i=NsplitClu;i<NPstateNodes;i++){
 	// 	unordered_set<int>::iterator it = c.find(localStateNodes[i].minCenterStateId);
 	// 	if(it == c.end())
 	// 		cout << ":::::::::+++++++ ERROR for pos " << i << " " << localStateNodes[i].minDiv << " " << localStateNodes[i].minCenterStateId << endl;
 	// }
 
-	for(vector<unordered_map<int,vector<LocalStateNode> > >::iterator medoids_it = medoidsTree.begin(); medoids_it != medoidsTree.end(); medoids_it++){
-		// Outer loop over sets of medoids
-		for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
-			// Inner loop over each set of medoids
+	for(SortedMedoids::iterator medoid_it = medoids.sortedMedoids.begin(); medoid_it != medoids.sortedMedoids.end(); medoid_it++){
+		// Inner loop over each set of medoids
+		vector<LocalStateNode> &medoid = medoid_it->second;
+		int NstatesInMedoid = medoid.size();
 
-			vector<LocalStateNode> &medoid = medoid_it->second;
-			int NstatesInMedoid = medoid.size();
-	
-			// Only lump non-centers; first element is a center.
-			for(int i=1;i<NstatesInMedoid;i++){
-	
-				// Only lump non-centers; first Nclu elements contain centers.
-				StateNode &lumpedStateNode = *medoid[i].minCenterStateNode;
-				StateNode &lumpingStateNode = *medoid[i].stateNode;
-				// Add context to lumped state node
-				lumpedStateNode.contexts.insert(lumpedStateNode.contexts.begin(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
-				// Add links to lumped state node
-				for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++){
-					lumpedStateNode.links[link_it->first] += link_it->second;
-				}
-				// Add physical links to lumped state node
-				for(map<int,double>::iterator link_it = lumpingStateNode.physLinks.begin(); link_it != lumpingStateNode.physLinks.end(); link_it++){
-					lumpedStateNode.physLinks[link_it->first] += link_it->second;
-				}
-		
-				lumpedStateNode.outWeight += lumpingStateNode.outWeight;
-		
-				// Update state id of lumping state node to point to lumped state node and make it inactive
-				lumpingStateNode.updatedStateId = lumpedStateNode.stateId;
-				lumpingStateNode.active = false;
+		// Only lump non-centers; first element is a center.
+		for(int i=1;i<NstatesInMedoid;i++){
+
+			// Only lump non-centers; first NsplitClu elements contain centers.
+			StateNode &lumpedStateNode = *medoid[i].minCenterStateNode;
+			StateNode &lumpingStateNode = *medoid[i].stateNode;
+			// Add context to lumped state node
+			lumpedStateNode.contexts.insert(lumpedStateNode.contexts.begin(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
+			// Add links to lumped state node
+			for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++){
+				lumpedStateNode.links[link_it->first] += link_it->second;
 			}
+			// Add physical links to lumped state node
+			for(map<int,double>::iterator link_it = lumpingStateNode.physLinks.begin(); link_it != lumpingStateNode.physLinks.end(); link_it++){
+				lumpedStateNode.physLinks[link_it->first] += link_it->second;
+			}
+	
+			lumpedStateNode.outWeight += lumpingStateNode.outWeight;
+	
+			// Update state id of lumping state node to point to lumped state node and make it inactive
+			lumpingStateNode.updatedStateId = lumpedStateNode.stateId;
+			lumpingStateNode.active = false;
 		}
 	}
 
@@ -917,34 +969,35 @@ void StateNetwork::lumpStateNodes(){
 
 	// To keept track of best solutions
 	vector<int> attemptsLeftVec(NphysNodes,0);
+	// vector<vector<pair<int,double> > > runDetails(NphysNodes);
 	vector<double> bestSumMinDiv(NphysNodes);
-	vector<vector<unordered_map<int,vector<LocalStateNode> > > > bestMedoidsTree(NphysNodes);
+	vector<Medoids> bestMedoids(NphysNodes);
 
 	// To be able to parallelize loop over physical nodes
 	int NtotAttempts = 0;
-	int PhysNodeNr = 0;
+	int physNodeNr = 0;
 	unordered_map<int,int> attemptToPhysNodeNrMap;
 	vector<PhysNode*> physNodeVec;
 	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
-		int NPstateNodes = phys_it->second.stateNodeIndices.size();
+		unsigned int NPstateNodes = phys_it->second.stateNodeIndices.size();
 		if(NPstateNodes > NfinalClu){
 			// Non-trivial problem with need for multiple attempts
-			bestSumMinDiv[PhysNodeNr] = NPstateNodes*bignum;
+			bestSumMinDiv[physNodeNr] = NPstateNodes*bignum;
 			for(int i=0;i<Nattempts;i++){
 				physNodeVec.push_back(&phys_it->second);
-				attemptToPhysNodeNrMap[NtotAttempts] = PhysNodeNr;
-				attemptsLeftVec[PhysNodeNr]++;
+				attemptToPhysNodeNrMap[NtotAttempts] = physNodeNr;
+				attemptsLeftVec[physNodeNr]++;
 				NtotAttempts++;
 			}
 		}
 		else{
 			// Trivial problem with no need for multiple attempts
 			physNodeVec.push_back(&phys_it->second);
-			attemptToPhysNodeNrMap[NtotAttempts] = PhysNodeNr;
-			attemptsLeftVec[PhysNodeNr]++;
+			attemptToPhysNodeNrMap[NtotAttempts] = physNodeNr;
+			attemptsLeftVec[physNodeNr]++;
 			NtotAttempts++;
 		}
-		PhysNodeNr++;
+		physNodeNr++;
 	}
 
 	// #pragma omp parallel 
@@ -958,86 +1011,58 @@ void StateNetwork::lumpStateNodes(){
 
 				// #pragma omp task
         {
-        	int PhysNodeNr = attemptToPhysNodeNrMap[attempt];
+        	int physNodeNr = attemptToPhysNodeNrMap[attempt];
 					PhysNode &physNode = *physNodeVec[attempt];
 					// PhysNode &physNode = phys_it->second;
-					int NPstateNodes = physNode.stateNodeIndices.size();
-					int Nmedoids = NPstateNodes;
-					int maxNstatesInMedoid = 1;
-					int Nlumpings = 0;
-					double oldSumMinDiff = 0.0;
-					double sumMinDiv = 0.0;
+					unsigned int NPstateNodes = physNode.stateNodeIndices.size();
 					int Nupdates = 0;
 					double preLumpingEntropyRate = calcEntropyRate(physNode);
 
 					if(NPstateNodes > NfinalClu){
 
 						// Initialize vector of vectors with state nodes in physical node with minimum necessary information
-						// The first Nclu elements will be centers
+						// The first NsplitClu elements will be centers
 						vector<LocalStateNode> medoid(NPstateNodes);
-						for(int i=0;i<NPstateNodes;i++){
+						for(unsigned int i=0;i<NPstateNodes;i++){
 							medoid[i].stateId = physNode.stateNodeIndices[i];
 							medoid[i].stateNode = &stateNodes[physNode.stateNodeIndices[i]];
 						}
 
-			
-						vector<unordered_map<int,vector<LocalStateNode> > > medoidsTree(1);
-						medoidsTree[0][0] = move(medoid);
+						Medoids medoids;
+						medoids.maxNstatesInMedoid = NphysNodes;
+						medoids.sortedMedoids.emplace(make_pair(0.0,move(medoid)));
 
 						// unordered_map<int,vector<LocalStateNode> > medoids;
 						// medoids[0] = move(medoid);
+
+						findCenters(medoids);
 			
-						// Initialize vector to store centers and stateId of closest center
-						for(int i=0;i<Nlevels;i++){
-							Nclu = NcluVec[i];
-							// Each iteration increases the number of medoids multiplicatively
-							sumMinDiv = findCenters(medoidsTree);
-							// Update centers as long as total distance to median changes more than threshold (max 10 iterations)
-							oldSumMinDiff = 2*sumMinDiv;
-							if(tune && (i == (Nlevels-1))){
-								while( (sumMinDiv < oldSumMinDiff) && (fabs(sumMinDiv-oldSumMinDiff) > threshold) && (Nupdates < 100) ){
-									// cout << fabs(sumMinDiv-oldSumMinDiff) << " ";
-									swap(oldSumMinDiff,sumMinDiv);
-									sumMinDiv = updateCenters(medoidsTree);
-
-									Nupdates++;
-								}
-							}
-						}
-
 						// Update best solution
 						#ifdef _OPENMP
-						omp_set_lock(&(lock[PhysNodeNr]));
+						omp_set_lock(&(lock[physNodeNr]));
 						#endif
-						if(sumMinDiv < bestSumMinDiv[PhysNodeNr]){
-							bestSumMinDiv[PhysNodeNr] = sumMinDiv;
-							bestMedoidsTree[PhysNodeNr] = medoidsTree;
+						// runDetails[physNodeNr].push_back(make_pair(omp_get_thread_num(),medoids.sumMinDiv));
+						if(medoids.sumMinDiv < bestSumMinDiv[physNodeNr]){
+							bestSumMinDiv[physNodeNr] = medoids.sumMinDiv;
+							bestMedoids[physNodeNr] = move(medoids);
 						}
-						attemptsLeftVec[PhysNodeNr]--;
-						if(attemptsLeftVec[PhysNodeNr] == 0){
-
-							Nmedoids = 0;
-							for(vector<unordered_map<int,vector<LocalStateNode> > >::iterator medoids_it = bestMedoidsTree[PhysNodeNr].begin(); medoids_it != bestMedoidsTree[PhysNodeNr].end(); medoids_it++){
-								// Outer loop over sets of medoids
-								Nmedoids += medoids_it->size();
-								for(unordered_map<int,vector<LocalStateNode> >::iterator medoid_it = medoids_it->begin(); medoid_it != medoids_it->end(); medoid_it++){
-									// Inner loop over each set of medoids
-									maxNstatesInMedoid = max(maxNstatesInMedoid,static_cast<int>(medoid_it->second.size()));
-								}
-							}
+						attemptsLeftVec[physNodeNr]--;
+						if(attemptsLeftVec[physNodeNr] == 0){
 				
 							// Perform the lumping and update stateNodes
-							performLumping(bestMedoidsTree[PhysNodeNr]);
-							Nlumpings = NPstateNodes - Nmedoids;
+							performLumping(bestMedoids[physNodeNr]);
 
 							double postLumpingEntropyRate = calcEntropyRate(physNode);
 
-							string output = "\n-->Lumped " + to_string(Nlumpings) + " state nodes (from " + to_string(max(NPstateNodes,1)) + " to " + to_string(Nmedoids) + " with max " + to_string(maxNstatesInMedoid) + " lumped states and total divergence " + to_string(sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates) in physical node " + to_string(PhysNodeNr) + "/" + to_string(NphysNodes) + ".               ";
+							string output = "\n-->Lumped state " + to_string(NPstateNodes) + " to " + to_string(bestMedoids[physNodeNr].sortedMedoids.size()) + " with max " + to_string(bestMedoids[physNodeNr].maxNstatesInMedoid) + " lumped states and total divergence " + to_string(bestMedoids[physNodeNr].sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+							// for(int i=0;i<runDetails[physNodeNr].size();i++)
+							// 	output += " " + to_string(runDetails[physNodeNr][i].first) + " " + to_string(runDetails[physNodeNr][i].second) + "/";
+
 							cout << output;
 
 						}
 						#ifdef _OPENMP
-						omp_unset_lock(&(lock[PhysNodeNr]));
+						omp_unset_lock(&(lock[physNodeNr]));
 						#endif
 
 			
@@ -1053,7 +1078,7 @@ void StateNetwork::lumpStateNodes(){
 
 						double postLumpingEntropyRate = calcEntropyRate(physNode);
 
-						string output = "\n-->Lumped " + to_string(Nlumpings) + " state nodes (from " + to_string(max(NPstateNodes,1)) + " to " + to_string(Nmedoids) + " with max " + to_string(maxNstatesInMedoid) + " lumped states and total divergence " + to_string(sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates) in physical node " + to_string(PhysNodeNr) + "/" + to_string(NphysNodes) + ".               ";
+						string output = "\n-->Lumped state " + to_string(NPstateNodes) + " to " + to_string(bestMedoids[physNodeNr].sortedMedoids.size()) + " with max " + to_string(bestMedoids[physNodeNr].maxNstatesInMedoid) + " lumped states and total divergence " + to_string(bestMedoids[physNodeNr].sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
 						cout << output;
 					}
 					
