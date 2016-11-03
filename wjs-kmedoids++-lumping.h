@@ -139,10 +139,11 @@ class StateNetwork{
 private:
 	double calcEntropyRate();
 	double calcEntropyRate(PhysNode &physNode);
+	double calcEntropyRate(Medoids &medoids);
 	double wJSdiv(int stateId1, int stateId2);
 	double wJSdiv(StateNode &stateNode1, StateNode &stateNode2);
 	void findCenters(Medoids &medoids);
-	double updateCenters(Medoids &medoids);
+	double updateCenters(unordered_map<int,pair<double,vector<LocalStateNode> > > &newMedoids);
 	void performLumping(Medoids &medoids);
 	bool readLines(string &line,vector<string> &lines);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line,int &batchNr);
@@ -542,7 +543,45 @@ double StateNetwork::calcEntropyRate(PhysNode &physNode){
 
 }
 
-double StateNetwork::updateCenters(Medoids &medoids){
+double StateNetwork::calcEntropyRate(Medoids &medoids){
+
+	double h = 0.0;
+
+	for(SortedMedoids::iterator medoid_it = medoids.sortedMedoids.begin(); medoid_it != medoids.sortedMedoids.end(); medoid_it++){
+		// Inner loop over each set of medoids
+		vector<LocalStateNode> &medoid = medoid_it->second;
+		int NstatesInMedoid = medoid.size();
+		// Create aggregated physical links
+		unordered_map<int,double> medoidPhysLinks;
+		double medoidOutWeight = 0.0;
+		for(int i=0;i<NstatesInMedoid;i++){
+			
+			StateNode &stateNode = *medoid[i].stateNode;
+			
+			// Aggregate physical links
+			for(map<int,double>::iterator link_it = stateNode.physLinks.begin(); link_it != stateNode.physLinks.end(); link_it++){
+				medoidPhysLinks[link_it->first] += link_it->second;
+			}
+	
+			medoidOutWeight += stateNode.outWeight;
+		}
+	
+		double H = 0.0;
+
+		for(unordered_map<int,double>::iterator it_link = medoidPhysLinks.begin(); it_link != medoidPhysLinks.end(); it_link++){
+			double p = it_link->second/medoidOutWeight;
+			H -= p*log2(p);
+		}
+		
+		h += medoidOutWeight*H/totWeight;
+	
+	}
+
+	return h;
+
+}
+
+double StateNetwork::updateCenters(unordered_map<int,pair<double,vector<LocalStateNode> > > &newMedoids){
 	
 	double sumMinDiv = 0.0;
 
@@ -867,6 +906,7 @@ void StateNetwork::findCenters(Medoids &medoids){
 	}
 			
   // Identify new medoids
+  double localSumMinDiv = 0.0;
 	unordered_map<int,pair<double,vector<LocalStateNode> > > newMedoids;
 	unordered_map<int,pair<double,vector<LocalStateNode> > >::iterator newMedoids_it;
 
@@ -874,6 +914,7 @@ void StateNetwork::findCenters(Medoids &medoids){
 
 		int centerId = medoid[i].minCenterStateNode->stateId;
 		double minDiv = medoid[i].minDiv;
+		localSumMinDiv += minDiv;
 		medoid[i].minDiv = bignum; // Reset for next iteration
 		newMedoids_it = newMedoids.find(centerId);
 
@@ -889,6 +930,8 @@ void StateNetwork::findCenters(Medoids &medoids){
 		} 
 
 	}
+
+
 
 	// Remove the split medoid
 	medoids.sumMinDiv -= medoids.sortedMedoids.begin()->first;
@@ -970,7 +1013,7 @@ void StateNetwork::lumpStateNodes(){
 	// To keept track of best solutions
 	vector<int> attemptsLeftVec(NphysNodes,0);
 	// vector<vector<pair<int,double> > > runDetails(NphysNodes);
-	vector<double> bestSumMinDiv(NphysNodes);
+	vector<double> bestEntropyRate(NphysNodes);
 	vector<Medoids> bestMedoids(NphysNodes);
 
 	// To be able to parallelize loop over physical nodes
@@ -982,7 +1025,7 @@ void StateNetwork::lumpStateNodes(){
 		unsigned int NPstateNodes = phys_it->second.stateNodeIndices.size();
 		if(NPstateNodes > NfinalClu){
 			// Non-trivial problem with need for multiple attempts
-			bestSumMinDiv[physNodeNr] = NPstateNodes*bignum;
+			bestEntropyRate[physNodeNr] = 100.0;
 			for(int i=0;i<Nattempts;i++){
 				physNodeVec.push_back(&phys_it->second);
 				attemptToPhysNodeNrMap[NtotAttempts] = physNodeNr;
@@ -1006,7 +1049,7 @@ void StateNetwork::lumpStateNodes(){
     {
 			// for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
 			// for(vector<PhysNode*>::iterator phys_it = physNodeVec.begin(); phys_it < physNodeVec.end(); phys_it++){
-    	#pragma omp parallel for schedule(dynamic,1) // default(none) shared(attemptsLeftVec,bestSumMinDiv,bestMedoidsTree,physNodeVec,lock)
+    	#pragma omp parallel for schedule(dynamic,1) // default(none) shared(attemptsLeftVec,bestEntropyRate,bestMedoidsTree,physNodeVec,lock)
     	for(int attempt=0;attempt<NtotAttempts;attempt++){
 
 				// #pragma omp task
@@ -1036,23 +1079,25 @@ void StateNetwork::lumpStateNodes(){
 						// medoids[0] = move(medoid);
 
 						findCenters(medoids);
-			
+
+						double attemptEntropyRate = calcEntropyRate(medoids);
+
 						// Update best solution
 						#ifdef _OPENMP
 						omp_set_lock(&(lock[physNodeNr]));
 						#endif
 						// runDetails[physNodeNr].push_back(make_pair(omp_get_thread_num(),medoids.sumMinDiv));
-						if(medoids.sumMinDiv < bestSumMinDiv[physNodeNr]){
-							bestSumMinDiv[physNodeNr] = medoids.sumMinDiv;
+						if(attemptEntropyRate < bestEntropyRate[physNodeNr]){
+							bestEntropyRate[physNodeNr] = attemptEntropyRate;
 							bestMedoids[physNodeNr] = move(medoids);
 						}
 						attemptsLeftVec[physNodeNr]--;
 						if(attemptsLeftVec[physNodeNr] == 0){
-				
+
 							// Perform the lumping and update stateNodes
 							performLumping(bestMedoids[physNodeNr]);
 
-							double postLumpingEntropyRate = calcEntropyRate(physNode);
+							double postLumpingEntropyRate = bestEntropyRate[physNodeNr];
 
 							string output = "\n-->Lumped state " + to_string(NPstateNodes) + " to " + to_string(bestMedoids[physNodeNr].sortedMedoids.size()) + " with max " + to_string(bestMedoids[physNodeNr].maxNstatesInMedoid) + " lumped states and total divergence " + to_string(bestMedoids[physNodeNr].sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
 							// for(int i=0;i<runDetails[physNodeNr].size();i++)
