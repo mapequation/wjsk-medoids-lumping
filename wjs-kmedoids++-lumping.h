@@ -995,7 +995,15 @@ void StateNetwork::findClusters(Medoids &medoids){
 	// Modifies the order of medoid(s) such that the fist NsplitClu will be the centers.
 	// Also, all elements will contain the stateId it is closest to.
 
-	vector<LocalStateNode> &medoid = medoids.sortedMedoids.begin()->second;
+	// Find medoid with highest entropy rate that can be split
+	SortedMedoids::iterator sortedMedoidsIt = medoids.sortedMedoids.begin();
+	while(sortedMedoidsIt != medoids.sortedMedoids.end() && sortedMedoidsIt->second.size() == 1)
+		sortedMedoidsIt++;
+
+	if(sortedMedoidsIt == medoids.sortedMedoids.end())
+		return;
+
+	vector<LocalStateNode> &medoid = sortedMedoidsIt->second;
 	unsigned int NstatesInMedoid = medoid.size();
 	if(NstatesInMedoid <= NsplitClu){
 		// All state nodes in medoid form their own medoids in the updated medoids
@@ -1146,16 +1154,16 @@ void StateNetwork::findClusters(Medoids &medoids){
 	}
 
 	// Remove the split medoid
-	medoids.sumMinDiv -= medoids.sortedMedoids.begin()->first;
-	medoids.maxNstatesInMedoid = min(medoids.maxNstatesInMedoid,static_cast<unsigned int>(medoids.sortedMedoids.begin()->second.size()));
-	medoids.sortedMedoids.erase(medoids.sortedMedoids.begin());
+	medoids.sumMinDiv -= sortedMedoidsIt->first;
+	medoids.maxNstatesInMedoid = min(medoids.maxNstatesInMedoid,static_cast<unsigned int>(sortedMedoidsIt->second.size()));
+	medoids.sortedMedoids.erase(sortedMedoidsIt);
 	
 	// Add the new medoids
 	for(newMedoids_it = newMedoids.begin(); newMedoids_it != newMedoids.end(); newMedoids_it++){
 		double h = calcEntropyRate(newMedoids_it->second.second);
 		newMedoids_it->second.first = h;
 		medoids.sumMinDiv += h;
-		cout << h << endl;
+		cout << newMedoids_it->first << " " << h << endl;
 		
 		medoids.maxNstatesInMedoid = max(medoids.maxNstatesInMedoid,static_cast<unsigned int>(newMedoids_it->second.second.size()));
 		medoids.sortedMedoids.insert(move(newMedoids_it->second));

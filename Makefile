@@ -2,8 +2,8 @@
 #CXX  = clang++
 CXX = g++-5
 LINK = $(CXX)
-CXXFLAGS = -std=c++11 -Wall -g 
-#CXXFLAGS = -std=c++11 -Wall -O3
+#CXXFLAGS = -std=c++11 -Wall -g 
+CXXFLAGS = -std=c++11 -Wall -O3
 #CXXFLAGS = -std=c++11 -Wall -O3 -fopenmp
 LFLAGS = -lm
 #LFLAGS = -lm -fopenmp
