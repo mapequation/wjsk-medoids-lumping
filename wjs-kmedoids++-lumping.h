@@ -16,6 +16,9 @@
 #ifdef _OPENMP
 #include <omp.h>
 #include <stdio.h>
+#else
+  #define omp_get_thread_num() 0
+	#define omp_get_max_threads() 1
 #endif
 using namespace std;
 #include <limits>
@@ -223,6 +226,7 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,unsigned int Nfi
 	this->tmpOutFileNameContexts = string(outFileName).append("_tmpcontexts");
 
 	int threads = max(1, omp_get_max_threads());
+
 	for(int i = 0; i < threads; i++){
     mtRands.push_back(mt19937(seed+1));
   }
@@ -1079,8 +1083,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 		for(unsigned int i=0;i<NstatesInMedoid;i++)
 			randStateOrder[i] = i;
 		for(unsigned int i=Ncenters;i<NstatesInMedoid;i++){
-			uniform_int_distribution<int> randInt(NrandStatesGenerated,NstatesInMedoid-1);
-			int randElement = randInt(mtRands[omp_get_thread_num()]);
+			int randElement = randInt(NrandStatesGenerated,NstatesInMedoid-1);
 			swap(randStateOrder[NrandStatesGenerated],randStateOrder[randElement]);
 			NrandStatesGenerated++;
 		}
@@ -1212,15 +1215,12 @@ void StateNetwork::performLumping(Medoids &medoids){
 
 void StateNetwork::lumpStateNodes(){
 
-	cout << "Lumping state nodes in each physical node";
+	cout << "Lumping state nodes in each physical node, using " << omp_get_max_threads() << " threads:" << endl;
 	#ifdef _OPENMP
-	cout << ", using " << omp_get_max_threads() << " threads:" << endl;
 	// Initiate locks to keep track of best solutions
 	omp_lock_t lock[NphysNodes];
 	for (int i=0; i<NphysNodes; i++)
     omp_init_lock(&(lock[i]));
-	#else
-	cout << ", using a single thread:" << endl;
 	#endif
 
 	// To keept track of best solutions
