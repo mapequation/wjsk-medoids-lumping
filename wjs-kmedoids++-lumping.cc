@@ -20,7 +20,7 @@ int main(int argc,char *argv[]){
   cout << endl;
 
   // Parse command input
-  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [-d <number of clusters in each division (>= 2)>] [--tune] [--batchoutput] input_state_network.net output_state_network.net\n";
+  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [-d <number of clusters in each division (>= 2)>] [--fast] [--batchoutput] input_state_network.net output_state_network.net\n";
   if( argc == 1 ){
     cout << CALL_SYNTAX;
     exit(-1);
@@ -35,7 +35,7 @@ int main(int argc,char *argv[]){
   unsigned int NsplitClu = 2;
   int Nattempts = 1;
   bool batchOutput = false;
-  bool tune = false;
+  bool fast = false;
   while(argNr < argc){
     if(to_string(argv[argNr]) == "-h"){
       cout << CALL_SYNTAX;
@@ -50,8 +50,8 @@ int main(int argc,char *argv[]){
       batchOutput = true;
       argNr++;
     }
-    else if(to_string(argv[argNr]) == "--tune"){
-      tune = true;
+    else if(to_string(argv[argNr]) == "--fast"){
+      fast = true;
       argNr++;
     }
     else if(to_string(argv[argNr]) == "-N"){
@@ -95,14 +95,18 @@ int main(int argc,char *argv[]){
   cout << "-->Will lump state nodes into number of clusters per physical node: " << NfinalClu << endl;
   cout << "-->Will iteratively divide worst cluster into number of clusters: " << NsplitClu << endl;
   cout << "-->Will make number of attempts: " << Nattempts << endl;
-  if(tune)
-    cout << "-->Will tune medoids for bestter accuracy." << endl;
+  if(fast)
+    cout << "-->Will use medoid center to approximate cluster entropy rate during assignment." << endl;
   else
-    cout << "-->Will not tune medoids for better accuracy." << endl;
+    cout << "-->Will use aggregate cluster to calculate entropy rate during assignment." << endl;
+  // if(tune)
+  //   cout << "-->Will tune medoids for bestter accuracy." << endl;
+  // else
+  //   cout << "-->Will not tune medoids for better accuracy." << endl;
   cout << "-->Will read state network from file: " << inFileName << endl;
   cout << "-->Will write processed state network to file: " << outFileName << endl;
 
-  StateNetwork statenetwork(inFileName,outFileName,NfinalClu,NsplitClu,Nattempts,tune,batchOutput,seed);
+  StateNetwork statenetwork(inFileName,outFileName,NfinalClu,NsplitClu,Nattempts,fast,batchOutput,seed);
 
   int NprocessedBatches = 0;
   while(statenetwork.loadStateNetworkBatch()){ // NprocessedBatches < 5 &&

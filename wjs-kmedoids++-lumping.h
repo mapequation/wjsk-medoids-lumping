@@ -165,7 +165,7 @@ private:
 	string tmpOutFileNameContexts;
 	bool batchOutput = false;
 	int Nattempts = 1;
-	bool tune = false;
+	bool fast = false;
 	vector<mt19937> mtRands;
 	ifstream ifs;
   string line;
@@ -198,7 +198,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,bool tune,bool batchOutput,int seed); 
+	StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,bool fast,bool batchOutput,int seed); 
 	void lumpStateNodes();
 	void loadNodeMapping();
 	bool loadStateNetworkBatch();
@@ -212,11 +212,11 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,bool tune,bool batchOutput,int seed){
+StateNetwork::StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,bool fast,bool batchOutput,int seed){
 	this->NfinalClu = NfinalClu;
 	this->NsplitClu = NsplitClu;
 	this->Nattempts = Nattempts;
-	this->tune = tune;
+	this->fast = fast;
 	this->batchOutput = batchOutput;
 	this->inFileName = inFileName;
 	this->outFileName = outFileName;
@@ -1016,42 +1016,16 @@ void StateNetwork::findClusters(Medoids &medoids){
 		// Find NsplitClu < NstatesInMedoid new centers in updated medoids
 		double minDivSumInMedoid = bignum*NstatesInMedoid;
 		unsigned int Ncenters = 0;
-		// // Find NsplitClu random centers
-		// while(Ncenters < NsplitClu)
-		// 	// Find random state node in physical node as first center
-		// 	uniform_int_distribution<int> randInt(Ncenters,NstatesInMedoid-1);
-		// 	int newCenterIndex = randInt(mtRands[omp_get_thread_num()]);
-		// 	minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
-		// 	medoid[newCenterIndex].minDiv = 0.0;
-		// 	medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
-
-		// 	// Put the center in first non-center position (Ncenters = 0) by swapping elements
-		// 	swap(medoid[Ncenters],medoid[newCenterIndex]);
-		// 	Ncenters++
-		// 	StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
-		// 	for(int i=Ncenters;i<NstatesInMedoid;i++){
-		// 		double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
-		// 		if(div < medoid[i].minDiv){
-		// 			// Found new minimum divergence to center
-		// 			minDivSumInMedoid -= medoid[i].minDiv;
-		// 			minDivSumInMedoid += div;
-		// 			medoid[i].minDiv = div;
-		// 			medoid[i].minCenterStateNode = lastClusterStateNode;
-		// 		}
-		// 	}				
-		// 
-		// Find random state node in physical node as first center
-		// uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
-		// int firstCenterIndex = randInt(mtRands[omp_get_thread_num()]);
 		int seedCenterIndex = randInt(0,NstatesInMedoid-1);
 		swap(medoid[Ncenters],medoid[seedCenterIndex]);
 
 		vector<double> seedMinDiv(NstatesInMedoid);
-
 		while(Ncenters < NsplitClu){
 		
 			// ************ Begin find state node proportional to distance from random node
-			int lastCenter = (Ncenters-1 < 0 ? 0 : Ncenters-1);
+			int lastCenter = Ncenters-1;
+			if(lastCenter < 0)
+			 	lastCenter = 0;
 			StateNode *lastClusterStateNode = medoid[lastCenter].stateNode;
 			
 			double sumSeedMinDiv = 0.0;
@@ -1060,6 +1034,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 				seedMinDiv[i] = div;
 				sumSeedMinDiv += div;
 			}
+			
 			// Pick new center proportional to minimum divergence
 			// uniform_real_distribution<double> randDouble(0.0,sumFirstMinDiv);
 			// double randMinDivSum = randDouble(mtRands[omp_get_thread_num()]);
@@ -1067,12 +1042,14 @@ void StateNetwork::findClusters(Medoids &medoids){
 			double minDivSum = 0.0;
 			for(unsigned int i=lastCenter;i<NstatesInMedoid;i++){
 				minDivSum += seedMinDiv[i];
-				if(minDivSum > randMinDivSum){
+				if(minDivSum >= randMinDivSum){
 					seedCenterIndex = i;
 					break;
 				}
 			}
-			
+
+			// cout << lastCenter << " " << sumSeedMinDiv << " " << minDivSum << endl;
+
 			// ************* End find state node proportional to distance from random node
 	
 			medoid[seedCenterIndex].minCenterStateNode = medoid[seedCenterIndex].stateNode;
@@ -1084,7 +1061,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 
 		}
 		seedMinDiv = vector<double>(0);
-
+		// cout << endl;
 		// Iterate in random order
 		int NrandStatesGenerated = Ncenters;
 		vector<int> randStateOrder(NstatesInMedoid);
@@ -1163,7 +1140,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 		double h = calcEntropyRate(newMedoids_it->second.second);
 		newMedoids_it->second.first = h;
 		medoids.sumMinDiv += h;
-		cout << newMedoids_it->first << " " << h << endl;
+		// cout << newMedoids_it->first << " " << h << " " << newMedoids_it->second.second.size() << endl;
 		
 		medoids.maxNstatesInMedoid = max(medoids.maxNstatesInMedoid,static_cast<unsigned int>(newMedoids_it->second.second.size()));
 		medoids.sortedMedoids.insert(move(newMedoids_it->second));
@@ -1279,7 +1256,6 @@ void StateNetwork::lumpStateNodes(){
 					PhysNode &physNode = *physNodeVec[attempt];
 					// PhysNode &physNode = phys_it->second;
 					unsigned int NPstateNodes = physNode.stateNodeIndices.size();
-					int Nupdates = 0;
 					double preLumpingEntropyRate = calcEntropyRate(physNode);
 
 					if(NPstateNodes > NfinalClu){
@@ -1299,10 +1275,16 @@ void StateNetwork::lumpStateNodes(){
 						// unordered_map<int,vector<LocalStateNode> > medoids;
 						// medoids[0] = move(medoid);
 
-						// findCenters(medoids);
-						// double attemptEntropyRate = calcEntropyRate(medoids);
-						findClusters(medoids);
-						double attemptEntropyRate = medoids.sumMinDiv;
+						double attemptEntropyRate;
+
+						if(fast){
+							findCenters(medoids);
+							attemptEntropyRate = calcEntropyRate(medoids);
+						}
+						else{
+							findClusters(medoids);
+							attemptEntropyRate = medoids.sumMinDiv;
+						}
 
 						// cout << medoids.sumMinDiv << " " << attemptEntropyRate << endl;
 						// for(SortedMedoids::iterator it = medoids.sortedMedoids.begin(); it != medoids.sortedMedoids.end(); it++){
@@ -1327,7 +1309,7 @@ void StateNetwork::lumpStateNodes(){
 
 							double postLumpingEntropyRate = bestEntropyRate[physNodeNr];
 
-							string output = "\n-->Lumped state " + to_string(NPstateNodes) + " to " + to_string(bestMedoids[physNodeNr].sortedMedoids.size()) + " with max " + to_string(bestMedoids[physNodeNr].maxNstatesInMedoid) + " lumped states and total divergence " + to_string(bestMedoids[physNodeNr].sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+							string output = "\n-->Lumped " + to_string(NPstateNodes) + " states to " + to_string(bestMedoids[physNodeNr].sortedMedoids.size()) + " states with max " + to_string(bestMedoids[physNodeNr].maxNstatesInMedoid) + " lumped states and total divergence " + to_string(bestMedoids[physNodeNr].sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(NtotAttempts) + " updates in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
 							// for(int i=0;i<runDetails[physNodeNr].size();i++)
 							// 	output += " " + to_string(runDetails[physNodeNr][i].first) + " " + to_string(runDetails[physNodeNr][i].second) + "/";
 
@@ -1349,9 +1331,7 @@ void StateNetwork::lumpStateNodes(){
 						if(NPstateNodes == 0)
 							NphysDanglings++;
 
-						double postLumpingEntropyRate = calcEntropyRate(physNode);
-
-						string output = "\n-->Lumped state " + to_string(NPstateNodes) + " to " + to_string(bestMedoids[physNodeNr].sortedMedoids.size()) + " with max " + to_string(bestMedoids[physNodeNr].maxNstatesInMedoid) + " lumped states and total divergence " + to_string(bestMedoids[physNodeNr].sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(Nupdates) + " updates in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+						string output = "\n-->Did not touch " + to_string(NPstateNodes) + " states in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
 						cout << output;
 					}
 					
