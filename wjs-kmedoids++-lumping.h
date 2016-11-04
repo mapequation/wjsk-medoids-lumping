@@ -140,9 +140,11 @@ private:
 	double calcEntropyRate();
 	double calcEntropyRate(PhysNode &physNode);
 	double calcEntropyRate(Medoids &medoids);
+	double calcEntropyRate(vector<LocalStateNode> &medoid);
 	double wJSdiv(int stateId1, int stateId2);
 	double wJSdiv(StateNode &stateNode1, StateNode &stateNode2);
 	void findCenters(Medoids &medoids);
+	void findClusters(Medoids &medoids);
 	double updateCenters(unordered_map<int,pair<double,vector<LocalStateNode> > > &newMedoids);
 	void performLumping(Medoids &medoids);
 	bool readLines(string &line,vector<string> &lines);
@@ -581,6 +583,38 @@ double StateNetwork::calcEntropyRate(Medoids &medoids){
 
 }
 
+double StateNetwork::calcEntropyRate(vector<LocalStateNode> &medoid){
+
+	double h = 0.0;
+	
+	int NstatesInMedoid = medoid.size();
+	// Create aggregated physical links
+	unordered_map<int,double> medoidPhysLinks;
+	double medoidOutWeight = 0.0;
+	for(int i=0;i<NstatesInMedoid;i++){
+		
+		StateNode &stateNode = *medoid[i].stateNode;
+		
+		// Aggregate physical links
+		for(map<int,double>::iterator link_it = stateNode.physLinks.begin(); link_it != stateNode.physLinks.end(); link_it++){
+			medoidPhysLinks[link_it->first] += link_it->second;
+		}
+
+		medoidOutWeight += stateNode.outWeight;
+	}
+
+	double H = 0.0;
+	for(unordered_map<int,double>::iterator it_link = medoidPhysLinks.begin(); it_link != medoidPhysLinks.end(); it_link++){
+		double p = it_link->second/medoidOutWeight;
+		H -= p*log2(p);
+	}
+	
+	h += medoidOutWeight*H/totWeight;
+
+	return h;
+
+}
+
 double StateNetwork::updateCenters(unordered_map<int,pair<double,vector<LocalStateNode> > > &newMedoids){
 	
 	double sumMinDiv = 0.0;
@@ -940,13 +974,192 @@ void StateNetwork::findCenters(Medoids &medoids){
 	
 	// Add the new medoids
 	for(newMedoids_it = newMedoids.begin(); newMedoids_it != newMedoids.end(); newMedoids_it++){
+		// double h = calcEntropyRate(newMedoids_it->second.second);
 		medoids.sumMinDiv += newMedoids_it->second.first;
+		// newMedoids_it->second.first = h;
+
 		medoids.maxNstatesInMedoid = max(medoids.maxNstatesInMedoid,static_cast<unsigned int>(newMedoids_it->second.second.size()));
 		medoids.sortedMedoids.insert(move(newMedoids_it->second));
 	} 
 
 	if(medoids.sortedMedoids.size() < NfinalClu)
 		findCenters(medoids);
+
+}
+
+void StateNetwork::findClusters(Medoids &medoids){
+	// Modifies the order of medoid(s) such that the fist NsplitClu will be the centers.
+	// Also, all elements will contain the stateId it is closest to.
+
+	vector<LocalStateNode> &medoid = medoids.sortedMedoids.begin()->second;
+	unsigned int NstatesInMedoid = medoid.size();
+	if(NstatesInMedoid <= NsplitClu){
+		// All state nodes in medoid form their own medoids in the updated medoids
+		for(unsigned int i=0;i<NstatesInMedoid;i++){
+			medoid[i].minDiv = 0.0;
+			medoid[i].minCenterStateNode = medoid[i].stateNode;
+		}
+	}
+	else{
+		// Find NsplitClu < NstatesInMedoid new centers in updated medoids
+		double minDivSumInMedoid = bignum*NstatesInMedoid;
+		unsigned int Ncenters = 0;
+		// // Find NsplitClu random centers
+		// while(Ncenters < NsplitClu)
+		// 	// Find random state node in physical node as first center
+		// 	uniform_int_distribution<int> randInt(Ncenters,NstatesInMedoid-1);
+		// 	int newCenterIndex = randInt(mtRands[omp_get_thread_num()]);
+		// 	minDivSumInMedoid -= medoid[newCenterIndex].minDiv;
+		// 	medoid[newCenterIndex].minDiv = 0.0;
+		// 	medoid[newCenterIndex].minCenterStateNode = medoid[newCenterIndex].stateNode;
+
+		// 	// Put the center in first non-center position (Ncenters = 0) by swapping elements
+		// 	swap(medoid[Ncenters],medoid[newCenterIndex]);
+		// 	Ncenters++
+		// 	StateNode *lastClusterStateNode = medoid[Ncenters-1].stateNode;
+		// 	for(int i=Ncenters;i<NstatesInMedoid;i++){
+		// 		double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
+		// 		if(div < medoid[i].minDiv){
+		// 			// Found new minimum divergence to center
+		// 			minDivSumInMedoid -= medoid[i].minDiv;
+		// 			minDivSumInMedoid += div;
+		// 			medoid[i].minDiv = div;
+		// 			medoid[i].minCenterStateNode = lastClusterStateNode;
+		// 		}
+		// 	}				
+		// 
+		// Find random state node in physical node as first center
+		// uniform_int_distribution<int> randInt(0,NstatesInMedoid-1);
+		// int firstCenterIndex = randInt(mtRands[omp_get_thread_num()]);
+		int seedCenterIndex = randInt(0,NstatesInMedoid-1);
+		swap(medoid[Ncenters],medoid[seedCenterIndex]);
+
+		vector<double> seedMinDiv(NstatesInMedoid);
+
+		while(Ncenters < NsplitClu){
+		
+			// ************ Begin find state node proportional to distance from random node
+			int lastCenter = (Ncenters-1 < 0 ? 0 : Ncenters-1);
+			StateNode *lastClusterStateNode = medoid[lastCenter].stateNode;
+			
+			double sumSeedMinDiv = 0.0;
+			for(unsigned int i=lastCenter;i<NstatesInMedoid;i++){
+				double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
+				seedMinDiv[i] = div;
+				sumSeedMinDiv += div;
+			}
+			// Pick new center proportional to minimum divergence
+			// uniform_real_distribution<double> randDouble(0.0,sumFirstMinDiv);
+			// double randMinDivSum = randDouble(mtRands[omp_get_thread_num()]);
+			double randMinDivSum = randDouble(sumSeedMinDiv);
+			double minDivSum = 0.0;
+			for(unsigned int i=lastCenter;i<NstatesInMedoid;i++){
+				minDivSum += seedMinDiv[i];
+				if(minDivSum > randMinDivSum){
+					seedCenterIndex = i;
+					break;
+				}
+			}
+			
+			// ************* End find state node proportional to distance from random node
+	
+			medoid[seedCenterIndex].minCenterStateNode = medoid[seedCenterIndex].stateNode;
+			minDivSumInMedoid -= medoid[seedCenterIndex].minDiv;
+			medoid[seedCenterIndex].minDiv = 0.0;
+			// Put the center in first non-center position (Ncenters = 0) by swapping elements
+			swap(medoid[Ncenters],medoid[seedCenterIndex]);
+			Ncenters++;
+
+		}
+		seedMinDiv = vector<double>(0);
+
+		// Iterate in random order
+		int NrandStatesGenerated = Ncenters;
+		vector<int> randStateOrder(NstatesInMedoid);
+		for(unsigned int i=0;i<NstatesInMedoid;i++)
+			randStateOrder[i] = i;
+		for(unsigned int i=Ncenters;i<NstatesInMedoid;i++){
+			uniform_int_distribution<int> randInt(NrandStatesGenerated,NstatesInMedoid-1);
+			int randElement = randInt(mtRands[omp_get_thread_num()]);
+			swap(randStateOrder[NrandStatesGenerated],randStateOrder[randElement]);
+			NrandStatesGenerated++;
+		}
+
+		// Create clusters
+		vector<StateNode> aggregatedClusters(Ncenters);
+		for(unsigned int i=0;i<Ncenters;i++){
+			aggregatedClusters[i].outWeight = medoid[i].stateNode->outWeight;
+			aggregatedClusters[i].physLinks = medoid[i].stateNode->physLinks;
+		}
+
+		// Cluster remaining states, lump in each step
+		for(unsigned int i=Ncenters;i<NstatesInMedoid;i++){
+			int randStateId = randStateOrder[i];
+			StateNode &randStateNode = *medoid[randStateId].stateNode;
+			int bestCluster = 0;
+			double minDiv = bignum;
+			for(unsigned int j=0;j<Ncenters;j++){
+				double div = wJSdiv(randStateNode,aggregatedClusters[j]);
+				if(div < minDiv){
+					// Found new minimum divergence to center
+					minDiv = div;
+					bestCluster = j;
+				}
+			}
+			// Perform best lumping
+			aggregatedClusters[bestCluster].outWeight += medoid[randStateId].stateNode->outWeight;
+			for(map<int,double>::iterator linkIt = randStateNode.physLinks.begin(); linkIt != randStateNode.physLinks.end(); linkIt++){
+				aggregatedClusters[bestCluster].physLinks[linkIt->first] += linkIt->second;
+			}
+			medoid[randStateId].minCenterStateNode = medoid[bestCluster].stateNode;
+		}
+
+	}
+			
+  // Identify new medoids
+  // double localSumMinDiv = 0.0;
+	unordered_map<int,pair<double,vector<LocalStateNode> > > newMedoids;
+	unordered_map<int,pair<double,vector<LocalStateNode> > >::iterator newMedoids_it;
+
+	for(unsigned int i=0;i<NstatesInMedoid;i++){
+
+		int centerId = medoid[i].minCenterStateNode->stateId;
+		// double minDiv = medoid[i].minDiv;
+		// localSumMinDiv += minDiv;
+		// medoid[i].minDiv = bignum; // Reset for next iteration
+		newMedoids_it = newMedoids.find(centerId);
+
+		if(newMedoids_it == newMedoids.end()){
+			pair<double,vector<LocalStateNode> > newMedoid;
+			// newMedoid.first = minDiv;
+			newMedoid.second.push_back(medoid[i]);
+			newMedoids.emplace(make_pair(centerId,newMedoid));
+		}
+		else{
+			// newMedoids_it->second.first += minDiv;
+			newMedoids_it->second.second.push_back(medoid[i]);
+		} 
+
+	}
+
+	// Remove the split medoid
+	medoids.sumMinDiv -= medoids.sortedMedoids.begin()->first;
+	medoids.maxNstatesInMedoid = min(medoids.maxNstatesInMedoid,static_cast<unsigned int>(medoids.sortedMedoids.begin()->second.size()));
+	medoids.sortedMedoids.erase(medoids.sortedMedoids.begin());
+	
+	// Add the new medoids
+	for(newMedoids_it = newMedoids.begin(); newMedoids_it != newMedoids.end(); newMedoids_it++){
+		double h = calcEntropyRate(newMedoids_it->second.second);
+		newMedoids_it->second.first = h;
+		medoids.sumMinDiv += h;
+		cout << h << endl;
+		
+		medoids.maxNstatesInMedoid = max(medoids.maxNstatesInMedoid,static_cast<unsigned int>(newMedoids_it->second.second.size()));
+		medoids.sortedMedoids.insert(move(newMedoids_it->second));
+	} 
+
+	if(medoids.sortedMedoids.size() < NfinalClu)
+		findClusters(medoids);
 
 }
 
@@ -1001,7 +1214,7 @@ void StateNetwork::lumpStateNodes(){
 
 	cout << "Lumping state nodes in each physical node";
 	#ifdef _OPENMP
-	cout << ", using " << omp_get_max_threads() << " threds:" << endl;
+	cout << ", using " << omp_get_max_threads() << " threads:" << endl;
 	// Initiate locks to keep track of best solutions
 	omp_lock_t lock[NphysNodes];
 	for (int i=0; i<NphysNodes; i++)
@@ -1078,9 +1291,16 @@ void StateNetwork::lumpStateNodes(){
 						// unordered_map<int,vector<LocalStateNode> > medoids;
 						// medoids[0] = move(medoid);
 
-						findCenters(medoids);
+						// findCenters(medoids);
+						// double attemptEntropyRate = calcEntropyRate(medoids);
+						findClusters(medoids);
+						double attemptEntropyRate = medoids.sumMinDiv;
 
-						double attemptEntropyRate = calcEntropyRate(medoids);
+						// cout << medoids.sumMinDiv << " " << attemptEntropyRate << endl;
+						// for(SortedMedoids::iterator it = medoids.sortedMedoids.begin(); it != medoids.sortedMedoids.end(); it++){
+						// 	cout << it->first << " " << calcEntropyRate(it->second) << endl;
+						// }
+
 
 						// Update best solution
 						#ifdef _OPENMP
