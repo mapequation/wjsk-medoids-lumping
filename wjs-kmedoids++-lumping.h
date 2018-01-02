@@ -262,9 +262,9 @@ double StateNetwork::randDouble(double to){
 
 double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 
-	if(stateNode1.stateId == stateNode2.stateId){
-		return 0.0;
-	}
+	// if(stateNode1.stateId == stateNode2.stateId){
+	// 	return 0.0;
+	// }
 
 	double h1 = 0.0; // The entropy rate of the first state node
 	double h2 = 0.0; // The entropy rate of the second state node
@@ -1083,6 +1083,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 		// Cluster remaining states, lump in each step
 		for(unsigned int i=Ncenters;i<NstatesInMedoid;i++){
 			int randStateId = randStateOrder[i];
+			// cout << randStateId << endl;
 			StateNode &randStateNode = *medoid[randStateId].stateNode;
 			int bestCluster = 0;
 			double minDiv = bignum;
