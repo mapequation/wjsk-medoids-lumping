@@ -17,8 +17,8 @@
 #include <omp.h>
 #include <stdio.h>
 #else
-  #define omp_get_thread_num() 0
-	#define omp_get_max_threads() 1
+#define omp_get_thread_num() 0
+#define omp_get_max_threads() 1
 #endif
 using namespace std;
 #include <limits>
@@ -72,7 +72,7 @@ public:
 	double outWeight;
 	bool active = true;
 	map<int,double> links;
-	map<int,double> physLinks;
+	// map<int,double> physLinks;
 	vector<string> contexts;
 };
 
@@ -193,14 +193,14 @@ private:
 	unsigned int NsplitClu;
 	// unordered_map<pair<int,int>,double,pairhash> cachedWJSdiv;
 	unordered_map<int,int> stateNodeIdMapping;
-	unordered_map<int,int> stateToPhysNodeMapping;
+	// unordered_map<int,int> stateToPhysNodeMapping;
 	unordered_map<int,PhysNode> physNodes;
 	unordered_map<int,StateNode> stateNodes;
 
 public:
 	StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,bool fast,bool batchOutput,int seed); 
 	void lumpStateNodes();
-	void loadNodeMapping();
+	// void loadNodeMapping();
 	bool loadStateNetworkBatch();
 	void printStateNetworkBatch();
 	void printStateNetwork();
@@ -231,14 +231,14 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,unsigned int Nfi
     mtRands.push_back(mt19937(seed+1));
   }
 
-	// Open state network for building state node to physical node mapping
-	ifs.open(inFileName.c_str());
-	if(!ifs){
-		cout << "failed to open \"" << inFileName << "\" exiting..." << endl;
-		exit(-1);
-	}
-	loadNodeMapping();
-	ifs.close();
+	// // Open state network for building state node to physical node mapping
+	// ifs.open(inFileName.c_str());
+	// if(!ifs){
+	// 	cout << "failed to open \"" << inFileName << "\" exiting..." << endl;
+	// 	exit(-1);
+	// }
+	// loadNodeMapping();
+	// ifs.close();
 
 	// Open state network to read batches one by one
 	line = "First line";
@@ -297,10 +297,10 @@ double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 		return 0.0;
 	}
 
-	map<int,double>::iterator links1 = stateNode1.physLinks.begin();
-	map<int,double>::iterator links2 = stateNode2.physLinks.begin();
-	map<int,double>::iterator links1end = stateNode1.physLinks.end();
-	map<int,double>::iterator links2end = stateNode2.physLinks.end();
+	map<int,double>::iterator links1 = stateNode1.links.begin();
+	map<int,double>::iterator links2 = stateNode2.links.begin();
+	map<int,double>::iterator links1end = stateNode1.links.end();
+	map<int,double>::iterator links2end = stateNode2.links.end();
 	
 	while(links1 != links1end && links2 != links2end){
 
@@ -411,10 +411,10 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 		return 0.0;
 	}
 
-	map<int,double>::iterator links1 = stateNode1.physLinks.begin();
-	map<int,double>::iterator links2 = stateNode2.physLinks.begin();
-	map<int,double>::iterator links1end = stateNode1.physLinks.end();
-	map<int,double>::iterator links2end = stateNode2.physLinks.end();
+	map<int,double>::iterator links1 = stateNode1.links.begin();
+	map<int,double>::iterator links2 = stateNode2.links.begin();
+	map<int,double>::iterator links1end = stateNode1.links.end();
+	map<int,double>::iterator links2end = stateNode2.links.end();
 	
 	while(links1 != links1end && links2 != links2end){
 
@@ -515,7 +515,7 @@ double StateNetwork::calcEntropyRate(){
 		if(stateNode.active){
 			double H = 0.0;
 
-			for(map<int,double>::iterator it_link = stateNode.physLinks.begin(); it_link != stateNode.physLinks.end(); it_link++){
+			for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
 				double p = it_link->second/stateNode.outWeight;
 				H -= p*log2(p);
 			}
@@ -537,7 +537,7 @@ double StateNetwork::calcEntropyRate(PhysNode &physNode){
 		if(stateNode.active){
 			double H = 0.0;
 
-			for(map<int,double>::iterator it_link = stateNode.physLinks.begin(); it_link != stateNode.physLinks.end(); it_link++){
+			for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
 				double p = it_link->second/stateNode.outWeight;
 				H -= p*log2(p);
 			}
@@ -558,15 +558,15 @@ double StateNetwork::calcEntropyRate(Medoids &medoids){
 		vector<LocalStateNode> &medoid = medoid_it->second;
 		int NstatesInMedoid = medoid.size();
 		// Create aggregated physical links
-		unordered_map<int,double> medoidPhysLinks;
+		unordered_map<int,double> medoidLinks;
 		double medoidOutWeight = 0.0;
 		for(int i=0;i<NstatesInMedoid;i++){
 			
 			StateNode &stateNode = *medoid[i].stateNode;
 			
 			// Aggregate physical links
-			for(map<int,double>::iterator link_it = stateNode.physLinks.begin(); link_it != stateNode.physLinks.end(); link_it++){
-				medoidPhysLinks[link_it->first] += link_it->second;
+			for(map<int,double>::iterator link_it = stateNode.links.begin(); link_it != stateNode.links.end(); link_it++){
+				medoidLinks[link_it->first] += link_it->second;
 			}
 	
 			medoidOutWeight += stateNode.outWeight;
@@ -574,7 +574,7 @@ double StateNetwork::calcEntropyRate(Medoids &medoids){
 	
 		double H = 0.0;
 
-		for(unordered_map<int,double>::iterator it_link = medoidPhysLinks.begin(); it_link != medoidPhysLinks.end(); it_link++){
+		for(unordered_map<int,double>::iterator it_link = medoidLinks.begin(); it_link != medoidLinks.end(); it_link++){
 			double p = it_link->second/medoidOutWeight;
 			H -= p*log2(p);
 		}
@@ -593,22 +593,22 @@ double StateNetwork::calcEntropyRate(vector<LocalStateNode> &medoid){
 	
 	int NstatesInMedoid = medoid.size();
 	// Create aggregated physical links
-	unordered_map<int,double> medoidPhysLinks;
+	unordered_map<int,double> medoidLinks;
 	double medoidOutWeight = 0.0;
 	for(int i=0;i<NstatesInMedoid;i++){
 		
 		StateNode &stateNode = *medoid[i].stateNode;
 		
 		// Aggregate physical links
-		for(map<int,double>::iterator link_it = stateNode.physLinks.begin(); link_it != stateNode.physLinks.end(); link_it++){
-			medoidPhysLinks[link_it->first] += link_it->second;
+		for(map<int,double>::iterator link_it = stateNode.links.begin(); link_it != stateNode.links.end(); link_it++){
+			medoidLinks[link_it->first] += link_it->second;
 		}
 
 		medoidOutWeight += stateNode.outWeight;
 	}
 
 	double H = 0.0;
-	for(unordered_map<int,double>::iterator it_link = medoidPhysLinks.begin(); it_link != medoidPhysLinks.end(); it_link++){
+	for(unordered_map<int,double>::iterator it_link = medoidLinks.begin(); it_link != medoidLinks.end(); it_link++){
 		double p = it_link->second/medoidOutWeight;
 		H -= p*log2(p);
 	}
@@ -1077,7 +1077,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 		vector<StateNode> aggregatedClusters(Ncenters);
 		for(unsigned int i=0;i<Ncenters;i++){
 			aggregatedClusters[i].outWeight = medoid[i].stateNode->outWeight;
-			aggregatedClusters[i].physLinks = medoid[i].stateNode->physLinks;
+			aggregatedClusters[i].links = medoid[i].stateNode->links;
 		}
 
 		// Cluster remaining states, lump in each step
@@ -1096,8 +1096,8 @@ void StateNetwork::findClusters(Medoids &medoids){
 			}
 			// Perform best lumping
 			aggregatedClusters[bestCluster].outWeight += medoid[randStateId].stateNode->outWeight;
-			for(map<int,double>::iterator linkIt = randStateNode.physLinks.begin(); linkIt != randStateNode.physLinks.end(); linkIt++){
-				aggregatedClusters[bestCluster].physLinks[linkIt->first] += linkIt->second;
+			for(map<int,double>::iterator linkIt = randStateNode.links.begin(); linkIt != randStateNode.links.end(); linkIt++){
+				aggregatedClusters[bestCluster].links[linkIt->first] += linkIt->second;
 			}
 			medoid[randStateId].minCenterStateNode = medoid[bestCluster].stateNode;
 		}
@@ -1183,10 +1183,10 @@ void StateNetwork::performLumping(Medoids &medoids){
 			for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++){
 				lumpedStateNode.links[link_it->first] += link_it->second;
 			}
-			// Add physical links to lumped state node
-			for(map<int,double>::iterator link_it = lumpingStateNode.physLinks.begin(); link_it != lumpingStateNode.physLinks.end(); link_it++){
-				lumpedStateNode.physLinks[link_it->first] += link_it->second;
-			}
+			// // Add physical links to lumped state node
+			// for(map<int,double>::iterator link_it = lumpingStateNode.physLinks.begin(); link_it != lumpingStateNode.physLinks.end(); link_it++){
+			// 	lumpedStateNode.physLinks[link_it->first] += link_it->second;
+			// }
 	
 			lumpedStateNode.outWeight += lumpingStateNode.outWeight;
 	
@@ -1383,37 +1383,37 @@ bool StateNetwork::readLines(string &line,vector<string> &lines){
 	return false; // Reached end of file
 }
 
-void StateNetwork::loadNodeMapping(){
+// void StateNetwork::loadNodeMapping(){
 
-	string buf;
-	istringstream ss;
-	bool isStateNode = false;
-	cout << "Loading state network to generate state node to physical node mapping:" << endl;
-	cout << "-->Reading states..." << flush;
-	while(getline(ifs,line)){
-		if(line[0] == '*'){
-			ss.clear();
-			ss.str(line);
-			ss >> buf;
-			if(buf == "*States")
-				isStateNode = true;
-			else
-				isStateNode = false;
-		}
-		else if(isStateNode && line[0] != '=' && line[0] != '#'){
-			ss.clear();
-			ss.str(line);
-			ss >> buf;
-			int stateId = atoi(buf.c_str());
-			ss >> buf;
-			int physId = atoi(buf.c_str());
-			stateToPhysNodeMapping[stateId] = physId;
-		}
-	}
-	cout << "found " << stateToPhysNodeMapping.size() << " states." << endl; 
+// 	string buf;
+// 	istringstream ss;
+// 	bool isStateNode = false;
+// 	cout << "Loading state network to generate state node to physical node mapping:" << endl;
+// 	cout << "-->Reading states..." << flush;
+// 	while(getline(ifs,line)){
+// 		if(line[0] == '*'){
+// 			ss.clear();
+// 			ss.str(line);
+// 			ss >> buf;
+// 			if(buf == "*States")
+// 				isStateNode = true;
+// 			else
+// 				isStateNode = false;
+// 		}
+// 		else if(isStateNode && line[0] != '=' && line[0] != '#'){
+// 			ss.clear();
+// 			ss.str(line);
+// 			ss >> buf;
+// 			int stateId = atoi(buf.c_str());
+// 			ss >> buf;
+// 			int physId = atoi(buf.c_str());
+// 			stateToPhysNodeMapping[stateId] = physId;
+// 		}
+// 	}
+// 	cout << "found " << stateToPhysNodeMapping.size() << " states." << endl; 
 
 
-}
+// }
 
 bool StateNetwork::loadStateNetworkBatch(){
 
@@ -1518,7 +1518,7 @@ bool StateNetwork::loadStateNetworkBatch(){
 		ss >> buf;
 		double linkWeight = atof(buf.c_str());
 		stateNodes[source].links[target] += linkWeight;
-		stateNodes[source].physLinks[stateToPhysNodeMapping[target]] += linkWeight;
+		// stateNodes[source].physLinks[stateToPhysNodeMapping[target]] += linkWeight;
 	}
  	cout << "done!" << endl;
 
