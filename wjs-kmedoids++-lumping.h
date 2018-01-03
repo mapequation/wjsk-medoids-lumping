@@ -262,9 +262,10 @@ double StateNetwork::randDouble(double to){
 
 double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 
-	if(stateNode1.stateId == stateNode2.stateId){
-		return 0.0;
-	}
+	// Commented out because some calls are without initialized stateId
+	// if(stateNode1.stateId == stateNode2.stateId){
+	// 	return 0.0;
+	// }
 
 	double h1 = 0.0; // The entropy rate of the first state node
 	double h2 = 0.0; // The entropy rate of the second state node
