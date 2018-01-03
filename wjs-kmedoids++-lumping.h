@@ -105,6 +105,8 @@ LocalStateNode::LocalStateNode(int stateid){
 
 typedef multimap< double, vector<LocalStateNode>, greater<double> > SortedMedoids;
 
+typedef map<string,vector<int> > ContextStates;
+
 class Medoids{
 public:
 
@@ -150,6 +152,7 @@ private:
 	void findClusters(Medoids &medoids);
 	double updateCenters(unordered_map<int,pair<double,vector<LocalStateNode> > > &newMedoids);
 	void performLumping(Medoids &medoids);
+	void performContextLumping(int order);
 	bool readLines(string &line,vector<string> &lines);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line,int &batchNr);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line);
@@ -1152,6 +1155,26 @@ void StateNetwork::findClusters(Medoids &medoids){
 
 }
 
+void StateNetwork::performContextLumping(int order){
+
+	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
+		PhysNode &physNode = phys_it->second;
+		unsigned int NPstateNodes = physNode.stateNodeIndices.size();
+		// double preLumpingEntropyRate = calcEntropyRate(physNode);
+		ContextStates contextStates;
+		for(unsigned int i=0;i<NPstateNodes;i++){
+			int stateId = physNode.stateNodeIndices[i];
+			StateNode &stateNode = stateNodes[physNode.stateNodeIndices[i]];
+			for(vector<string>::iterator context_it = stateNode.contexts.begin(); context_it != stateNode.contexts.end(); context_it++){
+				string context = (*context_it).substr(0,order);
+				contextStates[context].push_back(stateId);
+			}
+		}
+
+	}
+
+}
+
 void StateNetwork::performLumping(Medoids &medoids){
 
 // int NPstateNodes = localStateNodes[0].size();
@@ -1243,17 +1266,17 @@ void StateNetwork::lumpStateNodes(){
 	}
 
 	// #pragma omp parallel 
-  {
-  	// #pragma omp single nowait
-    {
+  	{
+  		// #pragma omp single nowait
+    	{
 			// for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
 			// for(vector<PhysNode*>::iterator phys_it = physNodeVec.begin(); phys_it < physNodeVec.end(); phys_it++){
-    	#pragma omp parallel for schedule(dynamic,1) // default(none) shared(attemptsLeftVec,bestEntropyRate,bestMedoidsTree,physNodeVec,lock)
-    	for(int attempt=0;attempt<NtotAttempts;attempt++){
+    		#pragma omp parallel for schedule(dynamic,1) // default(none) shared(attemptsLeftVec,bestEntropyRate,bestMedoidsTree,physNodeVec,lock)
+    		for(int attempt=0;attempt<NtotAttempts;attempt++){
 
 				// #pragma omp task
-        {
-        	int physNodeNr = attemptToPhysNodeNrMap[attempt];
+        		{
+        			int physNodeNr = attemptToPhysNodeNrMap[attempt];
 					PhysNode &physNode = *physNodeVec[attempt];
 					// PhysNode &physNode = phys_it->second;
 					unsigned int NPstateNodes = physNode.stateNodeIndices.size();
@@ -1367,7 +1390,7 @@ void StateNetwork::lumpStateNodes(){
 	#ifdef _OPENMP
 	for (int i=0; i<NphysNodes; i++)
     omp_destroy_lock(&(lock[i]));
-  #endif
+  	#endif
 }
 
 bool StateNetwork::readLines(string &line,vector<string> &lines){
