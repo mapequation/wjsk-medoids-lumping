@@ -105,7 +105,7 @@ LocalStateNode::LocalStateNode(int stateid){
 
 typedef multimap< double, vector<LocalStateNode>, greater<double> > SortedMedoids;
 
-typedef map<string,vector<int> > ContextStates;
+typedef map<vector<int>,vector<int> > ContextClusters;
 
 class Medoids{
 public:
@@ -145,6 +145,7 @@ private:
 	double calcEntropyRate();
 	double calcEntropyRate(PhysNode &physNode);
 	double calcEntropyRate(Medoids &medoids);
+	double calcEntropyRate(ContextClusters &contextClusters);
 	double calcEntropyRate(vector<LocalStateNode> &medoid);
 	double wJSdiv(int stateId1, int stateId2);
 	double wJSdiv(StateNode &stateNode1, StateNode &stateNode2);
@@ -152,7 +153,8 @@ private:
 	void findClusters(Medoids &medoids);
 	double updateCenters(unordered_map<int,pair<double,vector<LocalStateNode> > > &newMedoids);
 	void performLumping(Medoids &medoids);
-	void performContextLumping(int order);
+	void performContextLumping();
+	void updateStateNodes();
 	bool readLines(string &line,vector<string> &lines);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line,int &batchNr);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line);
@@ -168,16 +170,17 @@ private:
 	string tmpOutFileNameContexts;
 	bool batchOutput = false;
 	int Nattempts = 1;
+	int order;
 	bool fast = false;
 	vector<mt19937> mtRands;
 	ifstream ifs;
-  string line;
-  double totWeight = 0.0;
-  double accumWeight = 0.0;
-  int updatedStateId = 0;
+  	string line;
+  	double totWeight = 0.0;
+  	double accumWeight = 0.0;
+  	int updatedStateId = 0;
 	double entropyRate = 0.0;
 	unordered_map<int,int> completeStateNodeIdMapping;
-  int totNphysNodes = 0;
+  	int totNphysNodes = 0;
 	int totNstateNodes = 0;
 	int totNlinks = 0;
 	int totNdanglings = 0;
@@ -201,7 +204,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,bool fast,bool batchOutput,int seed); 
+	StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed); 
 	void lumpStateNodes();
 	// void loadNodeMapping();
 	bool loadStateNetworkBatch();
@@ -211,14 +214,15 @@ public:
 	void compileBatches();
 
 	bool keepReading = true;
-  int Nbatches = 0;
+  	int Nbatches = 0;
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,bool fast,bool batchOutput,int seed){
+StateNetwork::StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed){
 	this->NfinalClu = NfinalClu;
 	this->NsplitClu = NsplitClu;
 	this->Nattempts = Nattempts;
+	this->order = order;
 	this->fast = fast;
 	this->batchOutput = batchOutput;
 	this->inFileName = inFileName;
@@ -552,6 +556,9 @@ double StateNetwork::calcEntropyRate(PhysNode &physNode){
 
 }
 
+
+
+
 double StateNetwork::calcEntropyRate(Medoids &medoids){
 
 	double h = 0.0;
@@ -590,19 +597,38 @@ double StateNetwork::calcEntropyRate(Medoids &medoids){
 
 }
 
+double StateNetwork::calcEntropyRate(ContextClusters &contextClusters){
+
+	double h = 0.0;
+
+	for(ContextClusters::iterator cluster_it = contextClusters.begin(); cluster_it != contextClusters.end(); cluster_it++){
+
+		StateNode &stateNode = stateNodes[cluster_it->second[0]];
+		double H = 0.0;
+		for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
+			double p = it_link->second/stateNode.outWeight;
+			H -= p*log2(p);
+		}
+		h += stateNode.outWeight*H/totWeight;
+	}
+
+	return h;
+
+}
+
 double StateNetwork::calcEntropyRate(vector<LocalStateNode> &medoid){
 
 	double h = 0.0;
 	
 	int NstatesInMedoid = medoid.size();
-	// Create aggregated physical links
+	// Create aggregated links
 	unordered_map<int,double> medoidLinks;
 	double medoidOutWeight = 0.0;
 	for(int i=0;i<NstatesInMedoid;i++){
 		
 		StateNode &stateNode = *medoid[i].stateNode;
 		
-		// Aggregate physical links
+		// Aggregate  links
 		for(map<int,double>::iterator link_it = stateNode.links.begin(); link_it != stateNode.links.end(); link_it++){
 			medoidLinks[link_it->first] += link_it->second;
 		}
@@ -1155,23 +1181,91 @@ void StateNetwork::findClusters(Medoids &medoids){
 
 }
 
-void StateNetwork::performContextLumping(int order){
+void StateNetwork::performContextLumping(){
 
+	cout << "First lumping state nodes in each physical node based on context of order " << order << ":" << endl; //, using " << omp_get_max_threads() << " threads:" << endl;
+	// Can be parallelized
+
+	// Create state clusters with similar context of length order
 	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
+		// unordered_map<int,PhysNode>::iterator phys_it = physNodes.find(87);
+		string buf;
+		istringstream ss;
+		int physNodeNr = phys_it->first;
+		// cout << "Phys node " << physNodeNr << " " << flush;
 		PhysNode &physNode = phys_it->second;
 		unsigned int NPstateNodes = physNode.stateNodeIndices.size();
-		// double preLumpingEntropyRate = calcEntropyRate(physNode);
-		ContextStates contextStates;
+		double preLumpingEntropyRate = calcEntropyRate(physNode);
+		ContextClusters contextClusters;
+		// cout << NPstateNodes << " " << preLumpingEntropyRate << " " << flush;
 		for(unsigned int i=0;i<NPstateNodes;i++){
 			int stateId = physNode.stateNodeIndices[i];
 			StateNode &stateNode = stateNodes[physNode.stateNodeIndices[i]];
+			// cout << endl;
+			map<vector<int>,int> concatContexts;
 			for(vector<string>::iterator context_it = stateNode.contexts.begin(); context_it != stateNode.contexts.end(); context_it++){
-				string context = (*context_it).substr(0,order);
-				contextStates[context].push_back(stateId);
+				vector<int> concatContext(order);
+				ss.clear();
+	 			ss.str(*context_it);
+	 			for(int j=0;j<order;j++){
+	 				ss >> buf;
+	 				concatContext[j] = atoi(buf.c_str());
+	 			}
+	 			concatContexts[concatContext]++;
+			}
+			int maxConcatContextCount = 0;
+			vector<int> maxConcatContext(order);
+			for(map<vector<int>,int>::iterator context_it = concatContexts.begin(); context_it != concatContexts.end(); context_it++){
+				if(context_it->second > maxConcatContextCount){
+					maxConcatContextCount = context_it->second;
+					maxConcatContext = context_it->first;
+				}
+			}
+			contextClusters[maxConcatContext].push_back(stateId);
+		}
+		
+		// cout << contextClusters.size() << " " << flush;
+		// Lump states in clusters with similar context of length 'order'
+		for(ContextClusters::iterator cluster_it = contextClusters.begin(); cluster_it != contextClusters.end(); cluster_it++){
+			// Loop over all clusters
+
+			// cout << cluster_it->first[0] << " " << cluster_it->first[1] << endl;
+
+			vector<int> &cluster = cluster_it->second;
+			int NstatesInCluster = cluster.size();
+			// Only lump non-centers; first element is a center.
+			for(int i=1;i<NstatesInCluster;i++){
+	
+				// Lump state nodes to first state node in cluster
+				StateNode &lumpedStateNode = stateNodes[cluster[0]];
+				StateNode &lumpingStateNode = stateNodes[cluster[i]];
+				// Add context to lumped state node
+				// cout << i << "(" << NstatesInCluster << ") " << cluster[0] << " " << cluster[i] << flush;
+				lumpedStateNode.contexts.insert(lumpedStateNode.contexts.begin(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
+				// cout << endl;
+				// Add links to lumped state node
+				for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++){
+					lumpedStateNode.links[link_it->first] += link_it->second;
+				}
+				// // Add physical links to lumped state node
+				// for(map<int,double>::iterator link_it = lumpingStateNode.physLinks.begin(); link_it != lumpingStateNode.physLinks.end(); link_it++){
+				// 	lumpedStateNode.physLinks[link_it->first] += link_it->second;
+				// }
+				
+				lumpedStateNode.outWeight += lumpingStateNode.outWeight;
+		
+				// Update state id of lumping state node to point to lumped state node and make it inactive
+				lumpingStateNode.updatedStateId = lumpedStateNode.stateId;
+				lumpingStateNode.active = false;
 			}
 		}
+		double postLumpingEntropyRate = calcEntropyRate(contextClusters);
 
+		string output = "-->Context lumped " + to_string(NPstateNodes) + " states to " + to_string(contextClusters.size()) +  " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+		cout << output << endl;
 	}
+
+	updateStateNodes();
 
 }
 
@@ -1222,9 +1316,48 @@ void StateNetwork::performLumping(Medoids &medoids){
 
 }
 
+void StateNetwork::updateStateNodes(){
+
+	physNodes = unordered_map<int,PhysNode>();
+
+	// Update stateIds
+	// First all active state nodes that other state nodes have lumped to
+	Nlinks = 0; // Update number of links
+	NstateNodes = 0; // Update number of links
+	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+		StateNode &stateNode = it->second;
+		if(stateNode.active){
+			Nlinks += stateNode.links.size(); // Update number of links
+			NstateNodes++;
+			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
+			stateNode.updatedStateId = updatedStateId;
+			if(stateNode.outWeight > epsilon)
+				physNodes[stateNode.physId].stateNodeIndices.push_back(updatedStateId);
+			else
+				physNodes[stateNode.physId].stateNodeDanglingIndices.push_back(updatedStateId);
+			updatedStateId++;
+		}
+	}
+	// Then all inactive state nodes that have lumped to other state nodes
+	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+		StateNode &stateNode = it->second;
+		if(!stateNode.active){
+			stateNodeIdMapping[stateNode.stateId] = stateNodeIdMapping[stateNode.updatedStateId];
+		}
+	}
+
+}
+
+
 void StateNetwork::lumpStateNodes(){
 
 	cout << "Lumping state nodes in each physical node, using " << omp_get_max_threads() << " threads:" << endl;
+
+	if(order > 1)
+		performContextLumping();
+
+	abort();
+
 	#ifdef _OPENMP
 	// Initiate locks to keep track of best solutions
 	omp_lock_t lock[NphysNodes];
@@ -1365,27 +1498,7 @@ void StateNetwork::lumpStateNodes(){
 	} // end of #pragma omp parallel
 	cout << endl << "-->Updating state node ids" << endl;
 
-	// Update stateIds
-	// First all active state nodes that other state nodes have lumped to
-	Nlinks = 0; // Update number of links
-	NstateNodes = 0; // Update number of links
-	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
-		StateNode &stateNode = it->second;
-		if(stateNode.active){
-			Nlinks += stateNode.links.size(); // Update number of links
-			NstateNodes++;
-			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
-			stateNode.updatedStateId = updatedStateId;
-			updatedStateId++;
-		}
-	}
-	// Then all inactive state nodes that have lumped to other state nodes
-	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
-		StateNode &stateNode = it->second;
-		if(!stateNode.active){
-			stateNodeIdMapping[stateNode.stateId] = stateNodeIdMapping[stateNode.updatedStateId];
-		}
-	}
+	updateStateNodes();
 
 	#ifdef _OPENMP
 	for (int i=0; i<NphysNodes; i++)
