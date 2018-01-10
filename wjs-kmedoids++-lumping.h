@@ -1183,24 +1183,33 @@ void StateNetwork::findClusters(Medoids &medoids){
 
 void StateNetwork::performContextLumping(){
 
-	cout << "First lumping state nodes in each physical node based on context of order " << order << ":" << endl; //, using " << omp_get_max_threads() << " threads:" << endl;
+	cout << "First lumping state nodes in each physical node based on context of order " << order << ", using " << omp_get_max_threads() << " threads:" << endl;
 	// Can be parallelized
 
-	// Create state clusters with similar context of length order
+	// To be able to parallelize loop over physical nodes
+	int physNodeIndex = 0;
+	vector<pair<int,PhysNode*> > physNodeVec(NphysNodes);
 	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
+		physNodeVec[physNodeIndex] = make_pair(phys_it->first,&phys_it->second);
+		physNodeIndex++;
+	}
+
+	// Create state clusters with similar context of length order
+	// #pragma omp parallel for schedule(dynamic,1)
+	for(int physNodeIndex = 0;physNodeIndex < NphysNodes; physNodeIndex++){
 		// unordered_map<int,PhysNode>::iterator phys_it = physNodes.find(87);
 		string buf;
 		istringstream ss;
-		int physNodeNr = phys_it->first;
+		int physNodeNr = physNodeVec[physNodeIndex].first;
 		// cout << "Phys node " << physNodeNr << " " << flush;
-		PhysNode &physNode = phys_it->second;
+		PhysNode &physNode = *physNodeVec[physNodeIndex].second;
 		unsigned int NPstateNodes = physNode.stateNodeIndices.size();
 		double preLumpingEntropyRate = calcEntropyRate(physNode);
 		ContextClusters contextClusters;
 		// cout << NPstateNodes << " " << preLumpingEntropyRate << " " << flush;
 		for(unsigned int i=0;i<NPstateNodes;i++){
 			int stateId = physNode.stateNodeIndices[i];
-			StateNode &stateNode = stateNodes[physNode.stateNodeIndices[i]];
+			StateNode &stateNode = stateNodes[stateId];
 			// cout << endl;
 			map<vector<int>,int> concatContexts;
 			for(vector<string>::iterator context_it = stateNode.contexts.begin(); context_it != stateNode.contexts.end(); context_it++){
@@ -1353,10 +1362,10 @@ void StateNetwork::lumpStateNodes(){
 
 	cout << "Lumping state nodes in each physical node, using " << omp_get_max_threads() << " threads:" << endl;
 
-	if(order > 1)
-		performContextLumping();
+	// if(order > 1)
+	// 	performContextLumping();
 
-	abort();
+	// abort();
 
 	#ifdef _OPENMP
 	// Initiate locks to keep track of best solutions
