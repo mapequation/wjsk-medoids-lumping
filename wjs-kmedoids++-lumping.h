@@ -68,6 +68,7 @@ public:
 	StateNode(int stateid, int physid, double outweight);
 	int stateId;
 	int updatedStateId;
+	int baseId;
 	int physId;
 	double outWeight;
 	bool active = true;
@@ -82,6 +83,7 @@ StateNode::StateNode(){
 StateNode::StateNode(int stateid, int physid, double outweight){
 	stateId = stateid;
 	physId = physid;
+	baseId = physId;
 	outWeight = outweight;
 }
 
@@ -129,21 +131,22 @@ Medoids::Medoids(){
 // 	return m1.first < m2.first;
 // };
 
-class PhysNode{
+class BaseNode{
 public:
-	PhysNode();
+	BaseNode();
+	int physicalId;
 	vector<int> stateNodeIndices;
 	vector<int> stateNodeDanglingIndices;
 };
 
-PhysNode::PhysNode(){
+BaseNode::BaseNode(){
 };
 
 
 class StateNetwork{
 private:
 	double calcEntropyRate();
-	double calcEntropyRate(PhysNode &physNode);
+	double calcEntropyRate(BaseNode &baseNode);
 	double calcEntropyRate(Medoids &medoids);
 	double calcEntropyRate(ContextClusters &contextClusters);
 	double calcEntropyRate(vector<LocalStateNode> &medoid);
@@ -185,22 +188,19 @@ private:
 	int totNlinks = 0;
 	int totNdanglings = 0;
 	int totNcontexts = 0;
-	int totNphysDanglings = 0;
 
 	// For each batch
 	double weight = 0.0;
 	int NphysNodes = 0;
+	int NbaseNodes = 0;
 	int NstateNodes = 0;
 	int Nlinks = 0;
 	int Ndanglings = 0;
 	int Ncontexts = 0;
-	int NphysDanglings = 0;
 	unsigned int NfinalClu;
 	unsigned int NsplitClu;
-	// unordered_map<pair<int,int>,double,pairhash> cachedWJSdiv;
 	unordered_map<int,int> stateNodeIdMapping;
-	// unordered_map<int,int> stateToPhysNodeMapping;
-	unordered_map<int,PhysNode> physNodes;
+	unordered_map<int,BaseNode> baseNodes;
 	unordered_map<int,StateNode> stateNodes;
 
 public:
@@ -504,21 +504,6 @@ double StateNetwork::calcEntropyRate(){
 
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 		StateNode &stateNode = it->second;
-		// if(stateNode.active){
-		// 	double H = 0.0;
-		// 	double weight = 0.0;
-		// 	unordered_map<int,double> physLinks;
-		// 	for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
-		// 		physLinks[stateToPhysNodeMapping[it_link->first]] += it_link->second;
-		// 		weight += it_link->second;
-		// 	}
-		// 	for(unordered_map<int,double>::iterator it_link = physLinks.begin(); it_link != physLinks.end(); it_link++){
-		// 		double p = it_link->second/weight;
-		// 		H -= p*log2(p);	
-		// 	}
-			
-		// 	h += weight*H/totWeight;
-		// }
 		if(stateNode.active){
 			double H = 0.0;
 
@@ -534,11 +519,11 @@ double StateNetwork::calcEntropyRate(){
 
 }
 
-double StateNetwork::calcEntropyRate(PhysNode &physNode){
+double StateNetwork::calcEntropyRate(BaseNode &baseNode){
 
 	double h = 0.0;
 
-	for(vector<int>::iterator stateNodeId_it = physNode.stateNodeIndices.begin(); stateNodeId_it != physNode.stateNodeIndices.end(); stateNodeId_it++){
+	for(vector<int>::iterator stateNodeId_it = baseNode.stateNodeIndices.begin(); stateNodeId_it != baseNode.stateNodeIndices.end(); stateNodeId_it++){
 
 		StateNode &stateNode = stateNodes[*stateNodeId_it];
 		if(stateNode.active){
@@ -567,14 +552,14 @@ double StateNetwork::calcEntropyRate(Medoids &medoids){
 		// Inner loop over each set of medoids
 		vector<LocalStateNode> &medoid = medoid_it->second;
 		int NstatesInMedoid = medoid.size();
-		// Create aggregated physical links
+		// Create aggregated links
 		unordered_map<int,double> medoidLinks;
 		double medoidOutWeight = 0.0;
 		for(int i=0;i<NstatesInMedoid;i++){
 			
 			StateNode &stateNode = *medoid[i].stateNode;
 			
-			// Aggregate physical links
+			// Aggregate links
 			for(map<int,double>::iterator link_it = stateNode.links.begin(); link_it != stateNode.links.end(); link_it++){
 				medoidLinks[link_it->first] += link_it->second;
 			}
@@ -1183,32 +1168,31 @@ void StateNetwork::findClusters(Medoids &medoids){
 
 void StateNetwork::performContextLumping(){
 
-	cout << "First lumping state nodes in each physical node based on context of order " << order << ", using " << omp_get_max_threads() << " threads:" << endl;
+	cout << "First lumping state nodes in each base node based on context of order " << order << ", using " << omp_get_max_threads() << " threads:" << endl;
 	// Can be parallelized
 
-	// To be able to parallelize loop over physical nodes
-	int physNodeIndex = 0;
-	vector<pair<int,PhysNode*> > physNodeVec(NphysNodes);
-	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
-		physNodeVec[physNodeIndex] = make_pair(phys_it->first,&phys_it->second);
-		physNodeIndex++;
+	// To be able to parallelize loop over base nodes
+	int baseNodeIndex = 0;
+	vector<pair<int,BaseNode*> > baseNodeVec(NbaseNodes);
+	for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++){
+		baseNodeVec[baseNodeIndex] = make_pair(base_it->first,&base_it->second);
+		baseNodeIndex++;
 	}
 
 	// Create state clusters with similar context of length order
 	// #pragma omp parallel for schedule(dynamic,1)
-	for(int physNodeIndex = 0;physNodeIndex < NphysNodes; physNodeIndex++){
-		// unordered_map<int,PhysNode>::iterator phys_it = physNodes.find(87);
+	for(int baseNodeIndex = 0;baseNodeIndex < NbaseNodes; baseNodeIndex++){
 		string buf;
 		istringstream ss;
-		int physNodeNr = physNodeVec[physNodeIndex].first;
-		// cout << "Phys node " << physNodeNr << " " << flush;
-		PhysNode &physNode = *physNodeVec[physNodeIndex].second;
-		unsigned int NPstateNodes = physNode.stateNodeIndices.size();
-		double preLumpingEntropyRate = calcEntropyRate(physNode);
+		int baseNodeNr = baseNodeVec[baseNodeIndex].first;
+		BaseNode &baseNode = *baseNodeVec[baseNodeIndex].second;
+		int physNodeNr = baseNode.physicalId;
+		unsigned int NPstateNodes = baseNode.stateNodeIndices.size();
+		double preLumpingEntropyRate = calcEntropyRate(baseNode);
 		ContextClusters contextClusters;
 		// cout << NPstateNodes << " " << preLumpingEntropyRate << " " << flush;
 		for(unsigned int i=0;i<NPstateNodes;i++){
-			int stateId = physNode.stateNodeIndices[i];
+			int stateId = baseNode.stateNodeIndices[i];
 			StateNode &stateNode = stateNodes[stateId];
 			// cout << endl;
 			map<vector<int>,int> concatContexts;
@@ -1270,7 +1254,7 @@ void StateNetwork::performContextLumping(){
 		}
 		double postLumpingEntropyRate = calcEntropyRate(contextClusters);
 
-		string output = "-->Context lumped " + to_string(NPstateNodes) + " states to " + to_string(contextClusters.size()) +  " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+		string output = "-->Context lumped " + to_string(NPstateNodes) + " states to " + to_string(contextClusters.size()) +  " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) +".               ";
 		cout << output << endl;
 	}
 
@@ -1327,7 +1311,7 @@ void StateNetwork::performLumping(Medoids &medoids){
 
 void StateNetwork::updateStateNodes(){
 
-	physNodes = unordered_map<int,PhysNode>();
+	baseNodes = unordered_map<int,BaseNode>();
 
 	// Update stateIds
 	// First all active state nodes that other state nodes have lumped to
@@ -1341,12 +1325,15 @@ void StateNetwork::updateStateNodes(){
 			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
 			stateNode.updatedStateId = updatedStateId;
 			if(stateNode.outWeight > epsilon)
-				physNodes[stateNode.physId].stateNodeIndices.push_back(updatedStateId);
+				baseNodes[stateNode.baseId].stateNodeIndices.push_back(updatedStateId);
 			else
-				physNodes[stateNode.physId].stateNodeDanglingIndices.push_back(updatedStateId);
+				baseNodes[stateNode.baseId].stateNodeDanglingIndices.push_back(updatedStateId);
 			updatedStateId++;
 		}
 	}
+	for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++)
+		base_it->second.physicalId = base_it->first;
+
 	// Then all inactive state nodes that have lumped to other state nodes
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 		StateNode &stateNode = it->second;
@@ -1360,82 +1347,83 @@ void StateNetwork::updateStateNodes(){
 
 void StateNetwork::lumpStateNodes(){
 
-	cout << "Lumping state nodes in each physical node, using " << omp_get_max_threads() << " threads:" << endl;
+	cout << "Lumping state nodes in each base node, using " << omp_get_max_threads() << " threads:" << endl;
 
-	// if(order > 1)
-	// 	performContextLumping();
+	if(order > 1)
+		performContextLumping();
 
 	// abort();
 
 	#ifdef _OPENMP
 	// Initiate locks to keep track of best solutions
-	omp_lock_t lock[NphysNodes];
-	for (int i=0; i<NphysNodes; i++)
+	omp_lock_t lock[NbaseNodes];
+	for (int i=0; i<NbaseNodes; i++)
     omp_init_lock(&(lock[i]));
 	#endif
 
 	// To keept track of best solutions
-	vector<int> attemptsLeftVec(NphysNodes,0);
-	// vector<vector<pair<int,double> > > runDetails(NphysNodes);
-	vector<double> bestEntropyRate(NphysNodes);
-	vector<Medoids> bestMedoids(NphysNodes);
+	vector<int> attemptsLeftVec(NbaseNodes,0);
+	// vector<vector<pair<int,double> > > runDetails(NbaseNodes);
+	vector<double> bestEntropyRate(NbaseNodes);
+	vector<Medoids> bestMedoids(NbaseNodes);
 
-	// To be able to parallelize loop over physical nodes
+	// To be able to parallelize loop over base nodes
 	int NtotAttempts = 0;
-	int physNodeNr = 0;
-	unordered_map<int,int> attemptToPhysNodeNrMap;
-	vector<PhysNode*> physNodeVec;
-	for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
-		unsigned int NPstateNodes = phys_it->second.stateNodeIndices.size();
+	int baseNodeNr = 0;
+	unordered_map<int,int> attemptToBaseNodeNrMap;
+	vector<BaseNode*> baseNodeVec;
+	for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++){
+		unsigned int NPstateNodes = base_it->second.stateNodeIndices.size();
 		if(NPstateNodes > NfinalClu){
 			// Non-trivial problem with need for multiple attempts
-			bestEntropyRate[physNodeNr] = 100.0;
+			bestEntropyRate[baseNodeNr] = 100.0;
 			for(int i=0;i<Nattempts;i++){
-				physNodeVec.push_back(&phys_it->second);
-				attemptToPhysNodeNrMap[NtotAttempts] = physNodeNr;
-				attemptsLeftVec[physNodeNr]++;
+				baseNodeVec.push_back(&base_it->second);
+				attemptToBaseNodeNrMap[NtotAttempts] = baseNodeNr;
+				attemptsLeftVec[baseNodeNr]++;
 				NtotAttempts++;
 			}
 		}
 		else{
 			// Trivial problem with no need for multiple attempts
-			physNodeVec.push_back(&phys_it->second);
-			attemptToPhysNodeNrMap[NtotAttempts] = physNodeNr;
-			attemptsLeftVec[physNodeNr]++;
+			baseNodeVec.push_back(&base_it->second);
+			attemptToBaseNodeNrMap[NtotAttempts] = baseNodeNr;
+			attemptsLeftVec[baseNodeNr]++;
 			NtotAttempts++;
 		}
-		physNodeNr++;
+		baseNodeNr++;
 	}
 
 	// #pragma omp parallel 
   	{
   		// #pragma omp single nowait
     	{
-			// for(unordered_map<int,PhysNode>::iterator phys_it = physNodes.begin(); phys_it != physNodes.end(); phys_it++){
-			// for(vector<PhysNode*>::iterator phys_it = physNodeVec.begin(); phys_it < physNodeVec.end(); phys_it++){
-    		#pragma omp parallel for schedule(dynamic,1) // default(none) shared(attemptsLeftVec,bestEntropyRate,bestMedoidsTree,physNodeVec,lock)
+			// for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++){
+			// for(vector<BaseNode*>::iterator base_it = baseNodeVec.begin(); base_it < baseNodeVec.end(); base_it++){
+    		#pragma omp parallel for schedule(dynamic,1) // default(none) shared(attemptsLeftVec,bestEntropyRate,bestMedoidsTree,baseNodeVec,lock)
     		for(int attempt=0;attempt<NtotAttempts;attempt++){
 
 				// #pragma omp task
         		{
-        			int physNodeNr = attemptToPhysNodeNrMap[attempt];
-					PhysNode &physNode = *physNodeVec[attempt];
-					// PhysNode &physNode = phys_it->second;
-					unsigned int NPstateNodes = physNode.stateNodeIndices.size();
-					double preLumpingEntropyRate = calcEntropyRate(physNode);
+        			int baseNodeNr = attemptToBaseNodeNrMap[attempt];
+					BaseNode &baseNode = *baseNodeVec[attempt];
+					int physNodeNr = baseNode.physicalId;
+
+					unsigned int NPstateNodes = baseNode.stateNodeIndices.size();
+					double preLumpingEntropyRate = calcEntropyRate(baseNode);
 
 					if(NPstateNodes > NfinalClu){
 
-						// Initialize vector of vectors with state nodes in physical node with minimum necessary information
+						// Initialize vector of vectors with state nodes in base node with minimum necessary information
 						// The first NsplitClu elements will be centers
 						vector<LocalStateNode> medoid(NPstateNodes);
 						for(unsigned int i=0;i<NPstateNodes;i++){
-							medoid[i].stateId = physNode.stateNodeIndices[i];
-							medoid[i].stateNode = &stateNodes[physNode.stateNodeIndices[i]];
+							medoid[i].stateId = baseNode.stateNodeIndices[i];
+							medoid[i].stateNode = &stateNodes[baseNode.stateNodeIndices[i]];
 						}
 
 						Medoids medoids;
-						medoids.maxNstatesInMedoid = NphysNodes;
+						medoids.maxNstatesInMedoid = NbaseNodes;
 						medoids.sortedMedoids.emplace(make_pair(0.0,move(medoid)));
 
 						// unordered_map<int,vector<LocalStateNode> > medoids;
@@ -1460,30 +1448,30 @@ void StateNetwork::lumpStateNodes(){
 
 						// Update best solution
 						#ifdef _OPENMP
-						omp_set_lock(&(lock[physNodeNr]));
+						omp_set_lock(&(lock[baseNodeNr]));
 						#endif
-						// runDetails[physNodeNr].push_back(make_pair(omp_get_thread_num(),medoids.sumMinDiv));
-						if(attemptEntropyRate < bestEntropyRate[physNodeNr]){
-							bestEntropyRate[physNodeNr] = attemptEntropyRate;
-							bestMedoids[physNodeNr] = move(medoids);
+						// runDetails[baseNodeNr].push_back(make_pair(omp_get_thread_num(),medoids.sumMinDiv));
+						if(attemptEntropyRate < bestEntropyRate[baseNodeNr]){
+							bestEntropyRate[baseNodeNr] = attemptEntropyRate;
+							bestMedoids[baseNodeNr] = move(medoids);
 						}
-						attemptsLeftVec[physNodeNr]--;
-						if(attemptsLeftVec[physNodeNr] == 0){
+						attemptsLeftVec[baseNodeNr]--;
+						if(attemptsLeftVec[baseNodeNr] == 0){
 
 							// Perform the lumping and update stateNodes
-							performLumping(bestMedoids[physNodeNr]);
+							performLumping(bestMedoids[baseNodeNr]);
 
-							double postLumpingEntropyRate = bestEntropyRate[physNodeNr];
+							double postLumpingEntropyRate = bestEntropyRate[baseNodeNr];
 
-							string output = "\n-->Lumped " + to_string(NPstateNodes) + " states to " + to_string(bestMedoids[physNodeNr].sortedMedoids.size()) + " states with max " + to_string(bestMedoids[physNodeNr].maxNstatesInMedoid) + " lumped states and total divergence " + to_string(bestMedoids[physNodeNr].sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(NtotAttempts) + " updates in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
-							// for(int i=0;i<runDetails[physNodeNr].size();i++)
-							// 	output += " " + to_string(runDetails[physNodeNr][i].first) + " " + to_string(runDetails[physNodeNr][i].second) + "/";
+							string output = "\n-->Lumped " + to_string(NPstateNodes) + " states to " + to_string(bestMedoids[baseNodeNr].sortedMedoids.size()) + " states with max " + to_string(bestMedoids[baseNodeNr].maxNstatesInMedoid) + " lumped states and total divergence " + to_string(bestMedoids[baseNodeNr].sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(NtotAttempts) + " updates in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+							// for(int i=0;i<runDetails[baseNodeNr].size();i++)
+							// 	output += " " + to_string(runDetails[baseNodeNr][i].first) + " " + to_string(runDetails[baseNodeNr][i].second) + "/";
 
 							cout << output;
 
 						}
 						#ifdef _OPENMP
-						omp_unset_lock(&(lock[physNodeNr]));
+						omp_unset_lock(&(lock[baseNodeNr]));
 						#endif
 
 			
@@ -1494,10 +1482,7 @@ void StateNetwork::lumpStateNodes(){
 					}
 					else{
 
-						if(NPstateNodes == 0)
-							NphysDanglings++;
-
-						string output = "\n-->Did not touch " + to_string(NPstateNodes) + " states in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+						string output = "\n-->Did not touch " + to_string(NPstateNodes) + " states in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
 						cout << output;
 					}
 					
@@ -1510,7 +1495,7 @@ void StateNetwork::lumpStateNodes(){
 	updateStateNodes();
 
 	#ifdef _OPENMP
-	for (int i=0; i<NphysNodes; i++)
+	for (int i=0; i<NbaseNodes; i++)
     omp_destroy_lock(&(lock[i]));
   	#endif
 }
@@ -1553,10 +1538,10 @@ bool StateNetwork::readLines(string &line,vector<string> &lines){
 // 			int stateId = atoi(buf.c_str());
 // 			ss >> buf;
 // 			int physId = atoi(buf.c_str());
-// 			stateToPhysNodeMapping[stateId] = physId;
+// 			stateToBaseNodeMapping[stateId] = physId;
 // 		}
 // 	}
-// 	cout << "found " << stateToPhysNodeMapping.size() << " states." << endl; 
+// 	cout << "found " << stateToBaseNodeMapping.size() << " states." << endl; 
 
 
 // }
@@ -1642,14 +1627,20 @@ bool StateNetwork::loadStateNetworkBatch(){
 	  double outWeight = atof(buf.c_str());
 	  weight += outWeight;
 		if(outWeight > epsilon)
-			physNodes[physId].stateNodeIndices.push_back(stateId);
+			baseNodes[physId].stateNodeIndices.push_back(stateId);
 		else{
-			physNodes[physId].stateNodeDanglingIndices.push_back(stateId);
+			baseNodes[physId].stateNodeDanglingIndices.push_back(stateId);
 			Ndanglings++;
 		}
 		stateNodes[stateId] = StateNode(stateId,physId,outWeight);
 	}
-	NphysNodes = physNodes.size();
+
+	for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++)
+		base_it->second.physicalId = base_it->first;
+
+	NbaseNodes = baseNodes.size();
+	NphysNodes = NbaseNodes;
+
 	cout << "found " << Ndanglings << " dangling state nodes in " << NphysNodes << " physical nodes, done!" << endl;
 
 	// Process links 
@@ -1664,7 +1655,7 @@ bool StateNetwork::loadStateNetworkBatch(){
 		ss >> buf;
 		double linkWeight = atof(buf.c_str());
 		stateNodes[source].links[target] += linkWeight;
-		// stateNodes[source].physLinks[stateToPhysNodeMapping[target]] += linkWeight;
+		// stateNodes[source].physLinks[stateToBaseNodeMapping[target]] += linkWeight;
 	}
  	cout << "done!" << endl;
 
@@ -1795,7 +1786,6 @@ void StateNetwork::printStateNetwork(){
 	cout << "-->Writing header comments..." << flush;
   ofs << "# Number of physical nodes: " << NphysNodes << "\n";
   ofs << "# Number of state nodes: " << NstateNodes << "\n";
-  ofs << "# Number of dangling physical (and state) nodes: " << NphysDanglings << "\n";
   ofs << "# Number of links: " << Nlinks << "\n";
   ofs << "# Number of contexts: " << Ncontexts << "\n";
   ofs << "# Total weight: " << weight << "\n";
@@ -1859,20 +1849,18 @@ void StateNetwork::concludeBatch(){
 	totNlinks += Nlinks;
 	totNdanglings += Ndanglings;
 	totNcontexts += Ncontexts;
-	totNphysDanglings += NphysDanglings;
 	weight = 0.0;
 	NphysNodes = 0;
 	NstateNodes = 0;
 	Nlinks = 0;
 	Ndanglings = 0;
 	Ncontexts = 0;
-	NphysDanglings = 0;
 
 	cout << "-->Current estimate of the entropy rate: " << entropyRate*totWeight/accumWeight << endl;
 
 	completeStateNodeIdMapping.insert(stateNodeIdMapping.begin(),stateNodeIdMapping.end());
 	stateNodeIdMapping.clear();
-	physNodes.clear();
+	baseNodes.clear();
 	stateNodes.clear();
 	// cachedWJSdiv.clear();
 
@@ -1895,7 +1883,6 @@ void StateNetwork::compileBatches(){
   cout << "-->Writing header comments..." << flush;
   ofs << "# Number of physical nodes: " << totNphysNodes << "\n";
   ofs << "# Number of state nodes: " << totNstateNodes << "\n";
-  ofs << "# Number of dangling physical (and state) nodes: " << totNphysDanglings << "\n";
   ofs << "# Number of links: " << totNlinks << "\n";
   ofs << "# Number of contexts: " << totNcontexts << "\n";
   ofs << "# Total weight: " << totWeight << "\n";
