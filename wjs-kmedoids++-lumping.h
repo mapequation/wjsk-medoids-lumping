@@ -159,7 +159,8 @@ private:
 	void performContextLumping();
 	void updateStateNodes();
 	bool readBlockLines(string &line,vector<string> &lines);
-	bool readBlockLines(string &line);
+	bool readContextBlockLines(string &line,vector<string> &lines);
+	bool readContextBlockLines(string &line);
 	bool readLines(vector<string> &stateLines,vector<string> &linkLines,vector<string> &contextLines);
 	bool readContextLines(vector<string> &contextLines);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line,int &batchNr);
@@ -194,6 +195,7 @@ private:
 	int totNlinks = 0;
 	int totNdanglings = 0;
 	int totNcontexts = 0;
+	int totNclusterContexts = 0;
 
 	// For each batch
 	double weight = 0.0;
@@ -203,6 +205,7 @@ private:
 	int Nlinks = 0;
 	int Ndanglings = 0;
 	int Ncontexts = 0;
+	int NclusterContexts = 0;
 	unsigned int NfinalClu;
 	unsigned int NsplitClu;
 	unordered_map<int,int> stateNodeIdMapping;
@@ -1193,7 +1196,7 @@ void StateNetwork::performContextLumping(){
 	}
 
 	// Create state clusters with similar context of length order
-	// #pragma omp parallel for schedule(dynamic,1)
+	#pragma omp parallel for schedule(dynamic,1)
 	for(int baseNodeIndex = 0;baseNodeIndex < NbaseNodes; baseNodeIndex++){
 		string buf;
 		istringstream ss;
@@ -1527,7 +1530,21 @@ bool StateNetwork::readBlockLines(string &line,vector<string> &lines){
 	return false; // Reached end of file
 }
 
-bool StateNetwork::readBlockLines(string &line){
+bool StateNetwork::readContextBlockLines(string &line,vector<string> &lines){
+	
+	while(getline(cluster_ifs,line)){
+		if(line[0] == '*'){
+			return true;
+		}
+		else if(line[0] != '=' && line[0] != '#'){
+			lines.push_back(line);
+		}
+	}
+
+	return false; // Reached end of file
+}
+
+bool StateNetwork::readContextBlockLines(string &line){
 	
 	while(getline(cluster_ifs,line)){
 		if(line[0] == '*'){
@@ -1615,7 +1632,7 @@ bool StateNetwork::readContextLines(vector<string> &contextLines){
 	
 	// Read until next data label. Return false if no more data labels
 	if(keepReadingClusters){
-		cout << "Reading statenetwork, batch " << Nbatches+1 << ":" << endl;
+		cout << "Reading lumped statenetwork, batch " << Nbatches+1 << ":" << endl;
 		if(line[0] != '*'){
 			while(getline(cluster_ifs,line)){
 				if(line[0] == '*')
@@ -1627,7 +1644,7 @@ bool StateNetwork::readContextLines(vector<string> &contextLines){
 		}
 	}
 	else{
-		cout << "-->No more statenetwork batches to read." << endl;
+		cout << "-->No more lumped statenetwork batches to read." << endl;
 		return false;
 	}
 
@@ -1638,21 +1655,23 @@ bool StateNetwork::readContextLines(vector<string> &contextLines){
 		ss.str(line);
 		ss >> buf;
 		if(!readStates && buf == "*States"){
-			cout << "-->Reading states..." << flush;
+			cout << "-->Ignoring states..." << flush;
 			readStates = true;
-			keepReadingClusters = readBlockLines(line);
+			keepReadingClusters = readContextBlockLines(line);
+			cout << endl;
 		}
 		else if(!readLinks && buf == "*Links"){
-			cout << "-->Reading links..." << flush;
+			cout << "-->Ignoring links..." << flush;
 			readLinks = true;
-			keepReadingClusters = readBlockLines(line);
+			keepReadingClusters = readContextBlockLines(line);
+			cout << endl;
 		}
 		else if(!readContexts && buf == "*Contexts"){
 			cout << "-->Reading contexts..." << flush;
 			readContexts = true;
-			keepReadingClusters = readBlockLines(line,contextLines);
-			Ncontexts = contextLines.size();
-			cout << "found " << Ncontexts << " contexts." << endl;
+			keepReadingClusters = readContextBlockLines(line,contextLines);
+			NclusterContexts = contextLines.size();
+			cout << "found " << NclusterContexts << " cluster contexts." << endl;
 		}
 		else{
 			cout << "Expected *States, *Links, or *Contexts, but found " << buf << " exiting..." << endl;
@@ -1698,13 +1717,35 @@ bool StateNetwork::readContextLines(vector<string> &contextLines){
 
 bool StateNetwork::loadStateNetworkBatch(){
 
+	string buf;
+	istringstream ss;
+
 	// Use lumped state network for clusters
-	vector<string> clusterContextLines;
+	unordered_map<string,int> stateClusters;
+
 	if(readClusterFile){
+		vector<string> clusterContextLines;
 		bool processLines = readContextLines(clusterContextLines);
 		if(!processLines)
 			return false;
+
+		// Process contexts
+		cout << "-->Processing " << NclusterContexts  << " contexts..." << flush;
+		for(int i=0;i<NclusterContexts;i++){
+			ss.clear();
+			ss.str(clusterContextLines[i]);
+			ss >> buf;
+			int clusterId = atoi(buf.c_str());
+			string context = clusterContextLines[i].substr(buf.length()+1);
+			stateClusters[context] = clusterId;
+		}
+		cout << "done!" << endl;
+
+
 	}
+
+
+	// ************************* Read statenetwork batch ************************* //
 
 	vector<string> stateLines;
 	vector<string> linkLines;
@@ -1715,12 +1756,10 @@ bool StateNetwork::loadStateNetworkBatch(){
 	if(!processLines)
 		return false;
 
+
 	// ************************* Process statenetwork batch ************************* //
 	Nbatches++;
 	cout << "Processing statenetwork, batch " << Nbatches << ":" << endl;
-
-	string buf;
-	istringstream ss;
 
 	//Process states
 	cout << "-->Processing " << NstateNodes  << " state nodes..." << flush;
@@ -1734,20 +1773,20 @@ bool StateNetwork::loadStateNetworkBatch(){
 	  ss >> buf;
 	  double outWeight = atof(buf.c_str());
 	  weight += outWeight;
-		if(outWeight > epsilon)
-			baseNodes[physId].stateNodeIndices.push_back(stateId);
-		else{
-			baseNodes[physId].stateNodeDanglingIndices.push_back(stateId);
-			Ndanglings++;
-		}
+		// if(outWeight > epsilon)
+		// 	baseNodes[physId].stateNodeIndices.push_back(stateId);
+		// else{
+		// 	baseNodes[physId].stateNodeDanglingIndices.push_back(stateId);
+		// 	Ndanglings++;
+		// }
 		stateNodes[stateId] = StateNode(stateId,physId,outWeight);
 	}
 
-	for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++)
-		base_it->second.physicalId = base_it->first;
+	// for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++)
+	// 	base_it->second.physicalId = base_it->first;
 
-	NbaseNodes = baseNodes.size();
-	NphysNodes = NbaseNodes;
+	// NbaseNodes = baseNodes.size();
+	// NphysNodes = NbaseNodes;
 
 	cout << "found " << Ndanglings << " dangling state nodes in " << NphysNodes << " physical nodes, done!" << endl;
 
@@ -1778,6 +1817,31 @@ bool StateNetwork::loadStateNetworkBatch(){
 		stateNodes[stateNodeId].contexts.push_back(context);
 	}
 	cout << "done!" << endl;
+
+	// Populate baseNodes for internal lumping
+	unordered_set<int> physIds;
+	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+	 	StateNode &stateNode = it->second;
+	 	physIds.insert(stateNode.physId);
+	 	int baseNodeIndex = stateNode.physId;
+	 	if(readClusterFile)
+	 		baseNodeIndex = stateClusters[stateNode.contexts[0]];
+
+		if(stateNode.outWeight > epsilon){
+			baseNodes[baseNodeIndex].stateNodeIndices.push_back(stateNode.stateId); // Can be optimized with a single look-up
+			baseNodes[baseNodeIndex].physicalId = stateNode.physId;
+		}
+		else{
+			baseNodes[baseNodeIndex].stateNodeDanglingIndices.push_back(stateNode.stateId);
+			baseNodes[baseNodeIndex].physicalId = stateNode.physId;
+			Ndanglings++;
+		}
+		
+	}
+
+	NbaseNodes = baseNodes.size();
+	NphysNodes = physIds.size();
+
 
 	// // Validate out-weights
  // 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
@@ -1957,6 +2021,7 @@ void StateNetwork::concludeBatch(){
 	totNlinks += Nlinks;
 	totNdanglings += Ndanglings;
 	totNcontexts += Ncontexts;
+	totNclusterContexts += NclusterContexts;
 	weight = 0.0;
 	NphysNodes = 0;
 	NstateNodes = 0;
