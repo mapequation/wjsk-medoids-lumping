@@ -158,7 +158,10 @@ private:
 	void performLumping(Medoids &medoids);
 	void performContextLumping();
 	void updateStateNodes();
-	bool readLines(string &line,vector<string> &lines);
+	bool readBlockLines(string &line,vector<string> &lines);
+	bool readBlockLines(string &line);
+	bool readLines(vector<string> &stateLines,vector<string> &linkLines,vector<string> &contextLines);
+	bool readContextLines(vector<string> &contextLines);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line,int &batchNr);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line);
 	int randInt(int from, int to);
@@ -178,13 +181,15 @@ private:
 	bool fast = false;
 	vector<mt19937> mtRands;
 	ifstream ifs;
-  	string line;
-  	double totWeight = 0.0;
-  	double accumWeight = 0.0;
-  	int updatedStateId = 0;
+	ifstream cluster_ifs;
+  string line;
+  bool readClusterFile = false;
+  double totWeight = 0.0;
+  double accumWeight = 0.0;
+  int updatedStateId = 0;
 	double entropyRate = 0.0;
 	unordered_map<int,int> completeStateNodeIdMapping;
-  	int totNphysNodes = 0;
+  int totNphysNodes = 0;
 	int totNstateNodes = 0;
 	int totNlinks = 0;
 	int totNdanglings = 0;
@@ -215,7 +220,8 @@ public:
 	void compileBatches();
 
 	bool keepReading = true;
-  	int Nbatches = 0;
+	bool keepReadingClusters = true;
+  int Nbatches = 0;
 
 };
 
@@ -237,7 +243,7 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFi
 	int threads = max(1, omp_get_max_threads());
 
 	for(int i = 0; i < threads; i++){
-    mtRands.push_back(mt19937(seed+1));
+    	mtRands.push_back(mt19937(seed+1));
   }
 
 	// // Open state network for building state node to physical node mapping
@@ -252,6 +258,11 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFi
 	// Open state network to read batches one by one
 	line = "First line";
 	ifs.open(inFileName.c_str());
+	
+	if(clusterFileName != ""){
+		readClusterFile = true;
+		cluster_ifs.open(clusterFileName.c_str());
+	}
 
 }
 
@@ -1502,7 +1513,7 @@ void StateNetwork::lumpStateNodes(){
   	#endif
 }
 
-bool StateNetwork::readLines(string &line,vector<string> &lines){
+bool StateNetwork::readBlockLines(string &line,vector<string> &lines){
 	
 	while(getline(ifs,line)){
 		if(line[0] == '*'){
@@ -1514,6 +1525,143 @@ bool StateNetwork::readLines(string &line,vector<string> &lines){
 	}
 
 	return false; // Reached end of file
+}
+
+bool StateNetwork::readBlockLines(string &line){
+	
+	while(getline(cluster_ifs,line)){
+		if(line[0] == '*'){
+			return true;
+		}
+	}
+
+	return false; // Reached end of file
+}
+
+bool StateNetwork::readLines(vector<string> &stateLines,vector<string> &linkLines,vector<string> &contextLines){
+
+	bool readStates = false;
+	bool readLinks = false;
+	bool readContexts = false;
+	string buf;
+	istringstream ss;
+
+	// ************************* Read statenetwork batch ************************* //
+	
+	// Read until next data label. Return false if no more data labels
+	if(keepReading){
+		cout << "Reading statenetwork, batch " << Nbatches+1 << ":" << endl;
+		if(line[0] != '*'){
+			while(getline(ifs,line)){
+				if(line[0] == '*')
+					break;
+				size_t foundTotSize = line.find("# Total weight: ");
+				if(foundTotSize != string::npos)
+					totWeight = atof(line.substr(foundTotSize+16).c_str());
+			}
+		}
+	}
+	else{
+		cout << "-->No more statenetwork batches to read." << endl;
+		return false;
+	}
+
+
+	while(!readStates || !readLinks || !readContexts){
+
+		ss.clear();
+		ss.str(line);
+		ss >> buf;
+		if(!readStates && buf == "*States"){
+			cout << "-->Reading states..." << flush;
+			readStates = true;
+			keepReading = readBlockLines(line,stateLines);
+			NstateNodes = stateLines.size();
+			cout << "found " << NstateNodes << " states." << endl;
+		}
+		else if(!readLinks && buf == "*Links"){
+			cout << "-->Reading links..." << flush;
+			readLinks = true;
+			keepReading = readBlockLines(line,linkLines);
+			Nlinks = linkLines.size();
+			cout << "found " << Nlinks << " links." << endl;
+		}
+		else if(!readContexts && buf == "*Contexts"){
+			cout << "-->Reading contexts..." << flush;
+			readContexts = true;
+			keepReading = readBlockLines(line,contextLines);
+			Ncontexts = contextLines.size();
+			cout << "found " << Ncontexts << " contexts." << endl;
+		}
+		else{
+			cout << "Expected *States, *Links, or *Contexts, but found " << buf << " exiting..." << endl;
+			exit(-1);
+		}
+	}
+
+	return true;
+
+}
+
+bool StateNetwork::readContextLines(vector<string> &contextLines){
+
+	bool readStates = false;
+	bool readLinks = false;
+	bool readContexts = false;
+	string buf;
+	istringstream ss;
+
+	// ************************* Read statenetwork batch ************************* //
+	
+	// Read until next data label. Return false if no more data labels
+	if(keepReadingClusters){
+		cout << "Reading statenetwork, batch " << Nbatches+1 << ":" << endl;
+		if(line[0] != '*'){
+			while(getline(cluster_ifs,line)){
+				if(line[0] == '*')
+					break;
+				size_t foundTotSize = line.find("# Total weight: ");
+				if(foundTotSize != string::npos)
+					totWeight = atof(line.substr(foundTotSize+16).c_str());
+			}
+		}
+	}
+	else{
+		cout << "-->No more statenetwork batches to read." << endl;
+		return false;
+	}
+
+
+	while(!readStates || !readLinks || !readContexts){
+
+		ss.clear();
+		ss.str(line);
+		ss >> buf;
+		if(!readStates && buf == "*States"){
+			cout << "-->Reading states..." << flush;
+			readStates = true;
+			keepReadingClusters = readBlockLines(line);
+		}
+		else if(!readLinks && buf == "*Links"){
+			cout << "-->Reading links..." << flush;
+			readLinks = true;
+			keepReadingClusters = readBlockLines(line);
+		}
+		else if(!readContexts && buf == "*Contexts"){
+			cout << "-->Reading contexts..." << flush;
+			readContexts = true;
+			keepReadingClusters = readBlockLines(line,contextLines);
+			Ncontexts = contextLines.size();
+			cout << "found " << Ncontexts << " contexts." << endl;
+		}
+		else{
+			cout << "Expected *States, *Links, or *Contexts, but found " << buf << " exiting..." << endl;
+			exit(-1);
+		}
+	}
+
+	return true;
+
 }
 
 // void StateNetwork::loadNodeMapping(){
@@ -1550,71 +1698,29 @@ bool StateNetwork::readLines(string &line,vector<string> &lines){
 
 bool StateNetwork::loadStateNetworkBatch(){
 
+	// Use lumped state network for clusters
+	vector<string> clusterContextLines;
+	if(readClusterFile){
+		bool processLines = readContextLines(clusterContextLines);
+		if(!processLines)
+			return false;
+	}
+
 	vector<string> stateLines;
 	vector<string> linkLines;
 	vector<string> contextLines;
-	bool readStates = false;
-	bool readLinks = false;
-	bool readContexts = false;
-	string buf;
-	istringstream ss;
 
-	// ************************* Read statenetwork batch ************************* //
-	
-	// Read until next data label. Return false if no more data labels
-	if(keepReading){
-		cout << "Reading statenetwork, batch " << Nbatches+1 << ":" << endl;
-		if(line[0] != '*'){
-			while(getline(ifs,line)){
-				if(line[0] == '*')
-					break;
-				size_t foundTotSize = line.find("# Total weight: ");
-				if(foundTotSize != string::npos)
-					totWeight = atof(line.substr(foundTotSize+16).c_str());
-			}
-		}
-	}
-	else{
-		cout << "-->No more statenetwork batches to read." << endl;
+	// Read lines from input file and store depening of type
+	bool processLines = readLines(stateLines,linkLines,contextLines);
+	if(!processLines)
 		return false;
-	}
-
-
-	while(!readStates || !readLinks || !readContexts){
-
-		ss.clear();
-		ss.str(line);
-		ss >> buf;
-		if(!readStates && buf == "*States"){
-			cout << "-->Reading states..." << flush;
-			readStates = true;
-			keepReading = readLines(line,stateLines);
-			NstateNodes = stateLines.size();
-			cout << "found " << NstateNodes << " states." << endl;
-		}
-		else if(!readLinks && buf == "*Links"){
-			cout << "-->Reading links..." << flush;
-			readLinks = true;
-			keepReading = readLines(line,linkLines);
-			Nlinks = linkLines.size();
-			cout << "found " << Nlinks << " links." << endl;
-		}
-		else if(!readContexts && buf == "*Contexts"){
-			cout << "-->Reading contexts..." << flush;
-			readContexts = true;
-			keepReading = readLines(line,contextLines);
-			Ncontexts = contextLines.size();
-			cout << "found " << Ncontexts << " contexts." << endl;
-		}
-		else{
-			cout << "Expected *States, *Links, or *Contexts, but found " << buf << " exiting..." << endl;
-			exit(-1);
-		}
-	}
 
 	// ************************* Process statenetwork batch ************************* //
 	Nbatches++;
 	cout << "Processing statenetwork, batch " << Nbatches << ":" << endl;
+
+	string buf;
+	istringstream ss;
 
 	//Process states
 	cout << "-->Processing " << NstateNodes  << " state nodes..." << flush;

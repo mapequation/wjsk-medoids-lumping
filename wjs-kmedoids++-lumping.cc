@@ -108,7 +108,7 @@ int main(int argc,char *argv[]){
   cout << "-->Will iteratively divide worst cluster into number of clusters: " << NsplitClu << endl;
   cout << "-->Will make number of attempts: " << Nattempts << endl;
   if(order > 1)
-    cout << "-->Will first perform context lumping to Markov order:" << order << endl;
+    cout << "-->Will first perform context lumping to Markov order: " << order << endl;
   else
     cout << "-->Will not perform any context lumping." << endl;
   if(fast)
