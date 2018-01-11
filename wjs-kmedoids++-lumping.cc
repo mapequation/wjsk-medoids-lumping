@@ -20,7 +20,7 @@ int main(int argc,char *argv[]){
   cout << endl;
 
   // Parse command input
-  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [-o <max Markov order>] [-d <number of clusters in each division (>= 2)>] [--fast] [--batchoutput] input_state_network.net output_state_network.net\n";
+  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [-o <max Markov order>] [-d <number of clusters in each division (>= 2)>] [--fast] [--batchoutput] [-c lumped_state_network.net] input_state_network.net output_state_network.net\n";
   if( argc == 1 ){
     cout << CALL_SYNTAX;
     exit(-1);
@@ -29,6 +29,7 @@ int main(int argc,char *argv[]){
 
   string inFileName;
   string outFileName;
+  string clusterFileName = "";
 
   int argNr = 1;
   unsigned int NfinalClu = 100;
@@ -65,6 +66,11 @@ int main(int argc,char *argv[]){
       order = atoi(argv[argNr]);
       argNr++;
     }
+    else if(to_string(argv[argNr]) == "-c"){
+      argNr++;
+      clusterFileName = string(argv[argNr]);
+      argNr++;
+    }    
     else if(to_string(argv[argNr]) == "-k"){
       argNr++;
       NfinalClu = atoi(argv[argNr]);
@@ -109,7 +115,8 @@ int main(int argc,char *argv[]){
     cout << "-->Will use medoid center to approximate cluster entropy rate during assignment." << endl;
   else
     cout << "-->Will use aggregate cluster to calculate entropy rate during assignment." << endl;
-
+  if(clusterFileName != "")
+    cout << "-->Will lump higher-order states in clusters of lumped state network file: " << clusterFileName << endl;
   // if(tune)
   //   cout << "-->Will tune medoids for bestter accuracy." << endl;
   // else
@@ -117,7 +124,7 @@ int main(int argc,char *argv[]){
   cout << "-->Will read state network from file: " << inFileName << endl;
   cout << "-->Will write processed state network to file: " << outFileName << endl;
 
-  StateNetwork statenetwork(inFileName,outFileName,NfinalClu,NsplitClu,Nattempts,order,fast,batchOutput,seed);
+  StateNetwork statenetwork(inFileName,outFileName,clusterFileName,NfinalClu,NsplitClu,Nattempts,order,fast,batchOutput,seed);
 
   int NprocessedBatches = 0;
   while(statenetwork.loadStateNetworkBatch()){ // NprocessedBatches < 5 && 

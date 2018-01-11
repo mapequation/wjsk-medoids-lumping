@@ -167,6 +167,7 @@ private:
 	// For all batches
 	string inFileName;
 	string outFileName;
+	string clusterFileName;
 	string tmpOutFileName;
 	string tmpOutFileNameStates;
 	string tmpOutFileNameLinks;
@@ -204,7 +205,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed); 
+	StateNetwork(string inFileName,string outFileName,string clusterFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed); 
 	void lumpStateNodes();
 	// void loadNodeMapping();
 	bool loadStateNetworkBatch();
@@ -218,7 +219,7 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed){
+StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed){
 	this->NfinalClu = NfinalClu;
 	this->NsplitClu = NsplitClu;
 	this->Nattempts = Nattempts;
@@ -227,6 +228,7 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,unsigned int Nfi
 	this->batchOutput = batchOutput;
 	this->inFileName = inFileName;
 	this->outFileName = outFileName;
+	this->clusterFileName = clusterFileName;
 	this->tmpOutFileName = string(outFileName).append("_tmp");
 	this->tmpOutFileNameStates = string(outFileName).append("_tmpstates");
 	this->tmpOutFileNameLinks = string(outFileName).append("_tmplinks");
