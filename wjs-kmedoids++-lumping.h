@@ -75,6 +75,7 @@ public:
 	map<int,double> links;
 	// map<int,double> physLinks;
 	vector<string> contexts;
+	vector<int> lumpedStateIds;
 };
 
 StateNode::StateNode(){
@@ -157,6 +158,8 @@ private:
 	double updateCenters(unordered_map<int,pair<double,vector<LocalStateNode> > > &newMedoids);
 	void performLumping(Medoids &medoids);
 	void performContextLumping();
+	void updateBaseNodes();
+	void updateStateNodeIds();
 	void updateStateNodes();
 	bool readBlockLines(string &line,vector<string> &lines);
 	bool readContextBlockLines(string &line,vector<string> &lines);
@@ -1250,7 +1253,7 @@ void StateNetwork::performContextLumping(){
 				StateNode &lumpingStateNode = stateNodes[cluster[i]];
 				// Add context to lumped state node
 				// cout << i << "(" << NstatesInCluster << ") " << cluster[0] << " " << cluster[i] << flush;
-				lumpedStateNode.contexts.insert(lumpedStateNode.contexts.begin(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
+				lumpedStateNode.contexts.insert(lumpedStateNode.contexts.end(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
 				// cout << endl;
 				// Add links to lumped state node
 				for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++){
@@ -1262,6 +1265,9 @@ void StateNetwork::performContextLumping(){
 				// }
 				
 				lumpedStateNode.outWeight += lumpingStateNode.outWeight;
+
+				lumpedStateNode.lumpedStateIds.insert(lumpedStateNode.lumpedStateIds.end(),lumpingStateNode.lumpedStateIds.begin(),lumpingStateNode.lumpedStateIds.end());
+				lumpedStateNode.lumpedStateIds.push_back(lumpingStateNode.stateId);
 		
 				// Update state id of lumping state node to point to lumped state node and make it inactive
 				lumpingStateNode.updatedStateId = lumpedStateNode.stateId;
@@ -1273,8 +1279,6 @@ void StateNetwork::performContextLumping(){
 		string output = "-->Context lumped " + to_string(NPstateNodes) + " states to " + to_string(contextClusters.size()) +  " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) +".               ";
 		cout << output << endl;
 	}
-
-	updateStateNodes();
 
 }
 
@@ -1305,7 +1309,7 @@ void StateNetwork::performLumping(Medoids &medoids){
 			StateNode &lumpedStateNode = *medoid[i].minCenterStateNode;
 			StateNode &lumpingStateNode = *medoid[i].stateNode;
 			// Add context to lumped state node
-			lumpedStateNode.contexts.insert(lumpedStateNode.contexts.begin(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
+			lumpedStateNode.contexts.insert(lumpedStateNode.contexts.end(),lumpingStateNode.contexts.begin(),lumpingStateNode.contexts.end());
 			// Add links to lumped state node
 			for(map<int,double>::iterator link_it = lumpingStateNode.links.begin(); link_it != lumpingStateNode.links.end(); link_it++){
 				lumpedStateNode.links[link_it->first] += link_it->second;
@@ -1316,11 +1320,110 @@ void StateNetwork::performLumping(Medoids &medoids){
 			// }
 	
 			lumpedStateNode.outWeight += lumpingStateNode.outWeight;
+
+			lumpedStateNode.lumpedStateIds.insert(lumpedStateNode.lumpedStateIds.end(),lumpingStateNode.lumpedStateIds.begin(),lumpingStateNode.lumpedStateIds.end());
+			lumpedStateNode.lumpedStateIds.push_back(lumpingStateNode.stateId);
 	
 			// Update state id of lumping state node to point to lumped state node and make it inactive
 			lumpingStateNode.updatedStateId = lumpedStateNode.stateId;
 			lumpingStateNode.active = false;
 		}
+	}
+
+}
+
+void StateNetwork::updateBaseNodes(){
+
+	baseNodes = unordered_map<int,BaseNode>();
+
+	// Update stateIds
+	// First all active state nodes that other state nodes have lumped to
+	Nlinks = 0; // Update number of links
+	NstateNodes = 0; // Update number of links
+	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+		StateNode &stateNode = it->second;
+		if(stateNode.active){
+			Nlinks += stateNode.links.size(); // Update number of links
+			NstateNodes++;
+			// stateNodeIdMapping[stateNode.stateId] = updatedStateId;
+			// stateNode.updatedStateId = updatedStateId;
+
+			pair<unordered_map<int,BaseNode>::iterator , bool> baseNodeResult;
+			baseNodeResult.first = baseNodes.find(stateNode.baseId);
+			if(baseNodeResult.first == baseNodes.end()){
+				BaseNode baseNode;
+				baseNode.physicalId = stateNode.physId;
+				baseNodeResult = baseNodes.insert({stateNode.baseId,baseNode});
+			}
+			if(stateNode.outWeight > epsilon){
+				baseNodeResult.first->second.stateNodeIndices.push_back(stateNode.stateId);
+			}
+			else{
+				baseNodeResult.first->second.stateNodeDanglingIndices.push_back(stateNode.stateId);
+			}
+
+			// if(stateNode.outWeight > epsilon){
+			// 	baseNodes[stateNode.baseId].stateNodeIndices.push_back(updatedStateId);
+			//  baseNodes[stateNode.baseId].physicalId = stateNode.physId;
+			// }
+			// else{
+			// 	baseNodes[stateNode.baseId].stateNodeDanglingIndices.push_back(updatedStateId);
+			//  baseNodes[stateNode.baseId].physicalId = stateNode.physId;
+			// }
+
+			// updatedStateId++;
+		}
+	}
+
+	// for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++)
+	// 	base_it->second.physicalId = base_it->first;
+
+	// // Then all inactive state nodes that have lumped to other state nodes
+	// for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
+	// 	StateNode &stateNode = it->second;
+	// 	if(!stateNode.active){
+	// 		stateNodeIdMapping[stateNode.stateId] = stateNodeIdMapping[stateNode.updatedStateId];
+	// 	}
+	// }
+
+}
+
+void StateNetwork::updateStateNodeIds(){
+
+	for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++){
+		BaseNode &baseNode = base_it->second;
+		unsigned int NPstateNodes = baseNode.stateNodeIndices.size();
+		for(unsigned int i=0;i<NPstateNodes;i++){
+			int stateId = baseNode.stateNodeIndices[i];
+			StateNode &stateNode = stateNodes[stateId];
+			
+			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
+			stateNode.updatedStateId = updatedStateId;
+			updatedStateId++;
+			for(vector<int>::iterator lumpedStateId_it = stateNode.lumpedStateIds.begin(); lumpedStateId_it != stateNode.lumpedStateIds.end(); lumpedStateId_it++){
+				int lumpedStateId = *lumpedStateId_it;
+				stateNodeIdMapping[lumpedStateId] = updatedStateId;
+				stateNodes[lumpedStateId].updatedStateId = updatedStateId;
+				updatedStateId++;
+			}
+		}
+
+		unsigned int NPdanglingStateNodes = baseNode.stateNodeDanglingIndices.size();
+		for(unsigned int i=0;i<NPdanglingStateNodes;i++){
+			int stateId = baseNode.stateNodeDanglingIndices[i];
+			StateNode &stateNode = stateNodes[stateId];
+			
+			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
+			stateNode.updatedStateId = updatedStateId;
+			updatedStateId++;
+			for(vector<int>::iterator lumpedStateId_it = stateNode.lumpedStateIds.begin(); lumpedStateId_it != stateNode.lumpedStateIds.end(); lumpedStateId_it++){
+				int lumpedStateId = *lumpedStateId_it;
+				stateNodeIdMapping[lumpedStateId] = updatedStateId;
+				stateNodes[lumpedStateId].updatedStateId = updatedStateId;
+				updatedStateId++;
+			}
+		}
+
 	}
 
 }
@@ -1340,15 +1443,36 @@ void StateNetwork::updateStateNodes(){
 			NstateNodes++;
 			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
 			stateNode.updatedStateId = updatedStateId;
-			if(stateNode.outWeight > epsilon)
-				baseNodes[stateNode.baseId].stateNodeIndices.push_back(updatedStateId);
-			else
-				baseNodes[stateNode.baseId].stateNodeDanglingIndices.push_back(updatedStateId);
+
+			pair<unordered_map<int,BaseNode>::iterator , bool> baseNodeResult;
+			baseNodeResult.first = baseNodes.find(stateNode.baseId);
+			if(baseNodeResult.first == baseNodes.end()){
+				BaseNode baseNode;
+				baseNode.physicalId = stateNode.physId;
+				baseNodeResult = baseNodes.insert({stateNode.baseId,baseNode});
+			}
+			if(stateNode.outWeight > epsilon){
+				baseNodeResult.first->second.stateNodeIndices.push_back(updatedStateId);
+			}
+			else{
+				baseNodeResult.first->second.stateNodeDanglingIndices.push_back(updatedStateId);
+			}
+
+			// if(stateNode.outWeight > epsilon){
+			// 	baseNodes[stateNode.baseId].stateNodeIndices.push_back(updatedStateId);
+			//  baseNodes[stateNode.baseId].physicalId = stateNode.physId;
+			// }
+			// else{
+			// 	baseNodes[stateNode.baseId].stateNodeDanglingIndices.push_back(updatedStateId);
+			//  baseNodes[stateNode.baseId].physicalId = stateNode.physId;
+			// }
+
 			updatedStateId++;
 		}
 	}
-	for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++)
-		base_it->second.physicalId = base_it->first;
+
+	// for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++)
+	// 	base_it->second.physicalId = base_it->first;
 
 	// Then all inactive state nodes that have lumped to other state nodes
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
@@ -1365,8 +1489,11 @@ void StateNetwork::lumpStateNodes(){
 
 	cout << "Lumping state nodes in each base node, using " << omp_get_max_threads() << " threads:" << endl;
 
-	if(order > 1)
+	if(order > 1){
 		performContextLumping();
+		updateBaseNodes();
+	}
+
 
 	// abort();
 
@@ -1508,7 +1635,9 @@ void StateNetwork::lumpStateNodes(){
 	} // end of #pragma omp parallel
 	cout << endl << "-->Updating state node ids" << endl;
 
-	updateStateNodes();
+	updateBaseNodes();
+	updateStateNodeIds();
+	// updateStateNodes();
 
 	#ifdef _OPENMP
 	for (int i=0; i<NbaseNodes; i++)
