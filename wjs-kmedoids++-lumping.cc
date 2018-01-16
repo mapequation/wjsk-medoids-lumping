@@ -20,7 +20,7 @@ int main(int argc,char *argv[]){
   cout << endl;
 
   // Parse command input
-  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [-o <max Markov order>] [-d <number of clusters in each division (>= 2)>] [--fast] [--batchoutput] [-c lumped_state_network.net] input_state_network.net output_state_network.net\n";
+  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [--max-order <max Markov order>] [-d <number of clusters in each division (>= 2)>] [--fast] [--batchoutput] [--context-clusters lumped_state_network.net] input_state_network.net output_state_network.net [output_state_container.txt]\n";
   if( argc == 1 ){
     cout << CALL_SYNTAX;
     exit(-1);
@@ -29,6 +29,7 @@ int main(int argc,char *argv[]){
 
   string inFileName;
   string outFileName;
+  string containerOutFileName = "";
   string clusterFileName = "";
 
   int argNr = 1;
@@ -61,12 +62,12 @@ int main(int argc,char *argv[]){
       Nattempts = atoi(argv[argNr]);
       argNr++;
     }
-    else if(to_string(argv[argNr]) == "-o"){
+    else if(to_string(argv[argNr]) == "--max-order"){
       argNr++;
       order = atoi(argv[argNr]);
       argNr++;
     }
-    else if(to_string(argv[argNr]) == "-c"){
+    else if(to_string(argv[argNr]) == "--context-clusters"){
       argNr++;
       clusterFileName = string(argv[argNr]);
       argNr++;
@@ -98,6 +99,10 @@ int main(int argc,char *argv[]){
       argNr++;
       outFileName = string(argv[argNr]);
       argNr++;
+      if(argNr < argc){
+        containerOutFileName = string(argv[argNr]);
+        argNr++;
+      }
     }
 
   }
@@ -123,8 +128,10 @@ int main(int argc,char *argv[]){
   //   cout << "-->Will not tune medoids for better accuracy." << endl;
   cout << "-->Will read state network from file: " << inFileName << endl;
   cout << "-->Will write processed state network to file: " << outFileName << endl;
+  if(containerOutFileName != "")
+    cout << "-->Will write state node container assignments to: " << containerOutFileName << endl;
 
-  StateNetwork statenetwork(inFileName,outFileName,clusterFileName,NfinalClu,NsplitClu,Nattempts,order,fast,batchOutput,seed);
+  StateNetwork statenetwork(inFileName,outFileName,clusterFileName,containerOutFileName,NfinalClu,NsplitClu,Nattempts,order,fast,batchOutput,seed);
 
   int NprocessedBatches = 0;
   while(statenetwork.loadStateNetworkBatch()){ // NprocessedBatches < 5 && 
@@ -136,11 +143,14 @@ int main(int argc,char *argv[]){
     }
     else{
       statenetwork.printStateNetwork();
+      statenetwork.printStateNodeContainer();
       break;
     }
   }
 
-  if(statenetwork.Nbatches > 1)
+  if(statenetwork.Nbatches > 1){
     statenetwork.compileBatches();
+    statenetwork.printStateNodeContainer();
+  }
 
 }

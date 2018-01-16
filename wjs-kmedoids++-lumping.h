@@ -180,6 +180,7 @@ private:
 	string inFileName;
 	string outFileName;
 	string clusterFileName;
+	string containerOutFileName;
 	string tmpOutFileName;
 	string tmpOutFileNameStates;
 	string tmpOutFileNameLinks;
@@ -199,6 +200,7 @@ private:
 	double entropyRate = 0.0;
 	unordered_map<int,int> completeStateNodeIdMapping;
   int totNphysNodes = 0;
+  int totNbaseNodes = 0;
 	int totNstateNodes = 0;
 	int totNlinks = 0;
 	int totNdanglings = 0;
@@ -217,15 +219,17 @@ private:
 	unsigned int NfinalClu;
 	unsigned int NsplitClu;
 	unordered_map<int,int> stateNodeIdMapping;
+	map<int,int> stateNodeBaseNodeMapping;
 	unordered_map<int,BaseNode> baseNodes;
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,string clusterFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed); 
+	StateNetwork(string inFileName,string outFileName,string clusterFileName,string containerOutFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed); 
 	void lumpStateNodes();
 	// void loadNodeMapping();
 	bool loadStateNetworkBatch();
 	void printStateNetworkBatch();
+	void printStateNodeContainer();
 	void printStateNetwork();
 	void concludeBatch();
 	void compileBatches();
@@ -236,7 +240,7 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed){
+StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFileName,string containerOutFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed){
 	this->NfinalClu = NfinalClu;
 	this->NsplitClu = NsplitClu;
 	this->Nattempts = Nattempts;
@@ -246,6 +250,7 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFi
 	this->inFileName = inFileName;
 	this->outFileName = outFileName;
 	this->clusterFileName = clusterFileName;
+	this->containerOutFileName = containerOutFileName;
 	this->tmpOutFileName = string(outFileName).append("_tmp");
 	this->tmpOutFileNameStates = string(outFileName).append("_tmpstates");
 	this->tmpOutFileNameLinks = string(outFileName).append("_tmplinks");
@@ -1373,12 +1378,12 @@ void StateNetwork::updateStateNodeIds(){
 			
 			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
 			stateNode.updatedStateId = updatedStateId;
+			stateNodeBaseNodeMapping[updatedStateId] = base_it->first;
 			updatedStateId++;
 			for(vector<int>::iterator lumpedStateId_it = stateNode.lumpedStateIds.begin(); lumpedStateId_it != stateNode.lumpedStateIds.end(); lumpedStateId_it++){
 				int lumpedStateId = *lumpedStateId_it;
 				stateNodeIdMapping[lumpedStateId] = updatedStateId;
 				stateNodes[lumpedStateId].updatedStateId = updatedStateId;
-				updatedStateId++;
 			}
 		}
 
@@ -1389,12 +1394,12 @@ void StateNetwork::updateStateNodeIds(){
 			
 			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
 			stateNode.updatedStateId = updatedStateId;
+			stateNodeBaseNodeMapping[updatedStateId] = base_it->first;
 			updatedStateId++;
 			for(vector<int>::iterator lumpedStateId_it = stateNode.lumpedStateIds.begin(); lumpedStateId_it != stateNode.lumpedStateIds.end(); lumpedStateId_it++){
 				int lumpedStateId = *lumpedStateId_it;
 				stateNodeIdMapping[lumpedStateId] = updatedStateId;
 				stateNodes[lumpedStateId].updatedStateId = updatedStateId;
-				updatedStateId++;
 			}
 		}
 
@@ -1567,7 +1572,7 @@ void StateNetwork::lumpStateNodes(){
 						#ifdef _OPENMP
 						omp_set_lock(&(lock[baseNodeNr]));
 						#endif
-						// runDetails[baseNodeNr].push_back(make_pair(omp_get_thread_num(),medoids.sumMinDiv));
+
 						if(attemptEntropyRate < bestEntropyRate[baseNodeNr]){
 							bestEntropyRate[baseNodeNr] = attemptEntropyRate;
 							bestMedoids[baseNodeNr] = move(medoids);
@@ -1577,13 +1582,8 @@ void StateNetwork::lumpStateNodes(){
 
 							// Perform the lumping and update stateNodes
 							performLumping(bestMedoids[baseNodeNr]);
-
 							double postLumpingEntropyRate = bestEntropyRate[baseNodeNr];
-
 							string output = "\n-->Lumped " + to_string(NPstateNodes) + " states to " + to_string(bestMedoids[baseNodeNr].sortedMedoids.size()) + " states with max " + to_string(bestMedoids[baseNodeNr].maxNstatesInMedoid) + " lumped states and total divergence " + to_string(bestMedoids[baseNodeNr].sumMinDiv) + " and " +  to_string(100.0*(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate) + "\% entropy increase after " + to_string(NtotAttempts) + " updates in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
-							// for(int i=0;i<runDetails[baseNodeNr].size();i++)
-							// 	output += " " + to_string(runDetails[baseNodeNr][i].first) + " " + to_string(runDetails[baseNodeNr][i].second) + "/";
-
 							cout << output;
 
 						}
@@ -2127,6 +2127,7 @@ void StateNetwork::concludeBatch(){
 	entropyRate += calcEntropyRate();
 	accumWeight += weight;
 	totNphysNodes += NphysNodes;
+	totNbaseNodes += NbaseNodes;
 	totNstateNodes += NstateNodes;
 	totNlinks += Nlinks;
 	totNdanglings += Ndanglings;
@@ -2134,6 +2135,7 @@ void StateNetwork::concludeBatch(){
 	totNclusterContexts += NclusterContexts;
 	weight = 0.0;
 	NphysNodes = 0;
+	NbaseNodes = 0;
 	NstateNodes = 0;
 	Nlinks = 0;
 	Ndanglings = 0;
@@ -2264,6 +2266,21 @@ void StateNetwork::compileBatches(){
 		remove( tmpOutFileNameLinks.c_str() );
 		remove( tmpOutFileNameContexts.c_str() );
 	}
+
+}
+
+void StateNetwork::printStateNodeContainer(){
+
+	if(containerOutFileName != ""){
+
+		my_ofstream ofs;
+  	ofs.open(containerOutFileName.c_str());
+  	for(map<int,int>::iterator it = stateNodeBaseNodeMapping.begin(); it != stateNodeBaseNodeMapping.end(); it++)
+  		ofs << it->first << " " << it->second << endl;
+
+  	ofs.close();
+	}
+
 
 }
 
