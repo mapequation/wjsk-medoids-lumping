@@ -135,6 +135,7 @@ Medoids::Medoids(){
 class BaseNode{
 public:
 	BaseNode();
+	BaseNode(int physid);
 	int physicalId;
 	vector<int> stateNodeIndices;
 	vector<int> stateNodeDanglingIndices;
@@ -142,6 +143,10 @@ public:
 
 BaseNode::BaseNode(){
 };
+
+BaseNode::BaseNode(int physid){
+	physicalId = physid;
+}
 
 
 class StateNetwork{
@@ -1336,8 +1341,7 @@ void StateNetwork::updateBaseNodes(){
 
 	baseNodes = unordered_map<int,BaseNode>();
 
-	// Update stateIds
-	// First all active state nodes that other state nodes have lumped to
+	// Update baseNodes
 	Nlinks = 0; // Update number of links
 	NstateNodes = 0; // Update number of links
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
@@ -1345,46 +1349,16 @@ void StateNetwork::updateBaseNodes(){
 		if(stateNode.active){
 			Nlinks += stateNode.links.size(); // Update number of links
 			NstateNodes++;
-			// stateNodeIdMapping[stateNode.stateId] = updatedStateId;
-			// stateNode.updatedStateId = updatedStateId;
 
-			pair<unordered_map<int,BaseNode>::iterator , bool> baseNodeResult;
-			baseNodeResult.first = baseNodes.find(stateNode.baseId);
-			if(baseNodeResult.first == baseNodes.end()){
-				BaseNode baseNode;
-				baseNode.physicalId = stateNode.physId;
-				baseNodeResult = baseNodes.insert({stateNode.baseId,baseNode});
-			}
-			if(stateNode.outWeight > epsilon){
-				baseNodeResult.first->second.stateNodeIndices.push_back(stateNode.stateId);
-			}
-			else{
-				baseNodeResult.first->second.stateNodeDanglingIndices.push_back(stateNode.stateId);
-			}
-
-			// if(stateNode.outWeight > epsilon){
-			// 	baseNodes[stateNode.baseId].stateNodeIndices.push_back(updatedStateId);
-			//  baseNodes[stateNode.baseId].physicalId = stateNode.physId;
-			// }
-			// else{
-			// 	baseNodes[stateNode.baseId].stateNodeDanglingIndices.push_back(updatedStateId);
-			//  baseNodes[stateNode.baseId].physicalId = stateNode.physId;
-			// }
-
-			// updatedStateId++;
+			unordered_map<int,BaseNode>::iterator baseNode_it = baseNodes.find(stateNode.baseId);
+			if(baseNode_it == baseNodes.end())
+				baseNode_it = baseNodes.insert(baseNodes.end(),{stateNode.baseId,BaseNode(stateNode.physId)});
+			if(stateNode.outWeight > epsilon)
+				baseNode_it->second.stateNodeIndices.push_back(stateNode.stateId);
+			else
+				baseNode_it->second.stateNodeDanglingIndices.push_back(stateNode.stateId);
 		}
 	}
-
-	// for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++)
-	// 	base_it->second.physicalId = base_it->first;
-
-	// // Then all inactive state nodes that have lumped to other state nodes
-	// for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
-	// 	StateNode &stateNode = it->second;
-	// 	if(!stateNode.active){
-	// 		stateNodeIdMapping[stateNode.stateId] = stateNodeIdMapping[stateNode.updatedStateId];
-	// 	}
-	// }
 
 }
 
@@ -1494,14 +1468,13 @@ void StateNetwork::lumpStateNodes(){
 		updateBaseNodes();
 	}
 
-
-	// abort();
-
 	#ifdef _OPENMP
 	// Initiate locks to keep track of best solutions
 	omp_lock_t lock[NbaseNodes];
-	for (int i=0; i<NbaseNodes; i++)
+	for (int i=0; i<NbaseNodes; i++){
+		// cout << i << " " << endl;
     omp_init_lock(&(lock[i]));
+	}
 	#endif
 
 	// To keept track of best solutions
@@ -1547,8 +1520,8 @@ void StateNetwork::lumpStateNodes(){
     		for(int attempt=0;attempt<NtotAttempts;attempt++){
 
 				// #pragma omp task
-        		{
-        			int baseNodeNr = attemptToBaseNodeNrMap[attempt];
+        {
+        	int baseNodeNr = attemptToBaseNodeNrMap[attempt];
 					BaseNode &baseNode = *baseNodeVec[attempt];
 					int physNodeNr = baseNode.physicalId;
 
@@ -1590,6 +1563,7 @@ void StateNetwork::lumpStateNodes(){
 
 
 						// Update best solution
+						// cout << baseNodeNr << " " << NbaseNodes << endl;
 						#ifdef _OPENMP
 						omp_set_lock(&(lock[baseNodeNr]));
 						#endif
@@ -1892,6 +1866,7 @@ bool StateNetwork::loadStateNetworkBatch(){
 
 	//Process states
 	cout << "-->Processing " << NstateNodes  << " state nodes..." << flush;
+	unordered_set<int> physIds;
 	for(int i=0;i<NstateNodes;i++){
 		ss.clear();
 		ss.str(stateLines[i]);
@@ -1908,16 +1883,12 @@ bool StateNetwork::loadStateNetworkBatch(){
 		// 	baseNodes[physId].stateNodeDanglingIndices.push_back(stateId);
 		// 	Ndanglings++;
 		// }
+		physIds.insert(physId);
 		stateNodes[stateId] = StateNode(stateId,physId,outWeight);
 	}
 
-	// for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++)
-	// 	base_it->second.physicalId = base_it->first;
-
-	// NbaseNodes = baseNodes.size();
-	// NphysNodes = NbaseNodes;
-
-	cout << "found " << Ndanglings << " dangling state nodes in " << NphysNodes << " physical nodes, done!" << endl;
+	NphysNodes = physIds.size();
+	cout << "found " << NphysNodes << " physical nodes, done!" << endl;
 
 	// Process links 
 	cout << "-->Processing " << Nlinks  << " links..." << flush;
@@ -1948,28 +1919,38 @@ bool StateNetwork::loadStateNetworkBatch(){
 	cout << "done!" << endl;
 
 	// Populate baseNodes for internal lumping
-	unordered_set<int> physIds;
+	cout << "-->Populating base nodes..." << flush;
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 	 	StateNode &stateNode = it->second;
-	 	physIds.insert(stateNode.physId);
 	 	int baseNodeIndex = stateNode.physId;
 	 	if(readClusterFile)
 	 		baseNodeIndex = stateClusters[stateNode.contexts[0]];
 
+	 	unordered_map<int,BaseNode>::iterator baseNode_it = baseNodes.find(baseNodeIndex);
+		if(baseNode_it == baseNodes.end())
+			baseNode_it = baseNodes.insert(baseNodes.end(),{baseNodeIndex,BaseNode(stateNode.physId)});
 		if(stateNode.outWeight > epsilon){
-			baseNodes[baseNodeIndex].stateNodeIndices.push_back(stateNode.stateId); // Can be optimized with a single look-up
-			baseNodes[baseNodeIndex].physicalId = stateNode.physId;
+			baseNode_it->second.stateNodeIndices.push_back(stateNode.stateId);
 		}
 		else{
-			baseNodes[baseNodeIndex].stateNodeDanglingIndices.push_back(stateNode.stateId);
-			baseNodes[baseNodeIndex].physicalId = stateNode.physId;
+			baseNode_it->second.stateNodeDanglingIndices.push_back(stateNode.stateId);
 			Ndanglings++;
 		}
+
+		// if(stateNode.outWeight > epsilon){
+		// 	baseNodes[baseNodeIndex].stateNodeIndices.push_back(stateNode.stateId); // Can be optimized with a single look-up
+		// 	baseNodes[baseNodeIndex].physicalId = stateNode.physId;
+		// }
+		// else{
+		// 	baseNodes[baseNodeIndex].stateNodeDanglingIndices.push_back(stateNode.stateId);
+		// 	baseNodes[baseNodeIndex].physicalId = stateNode.physId;
+		// 	Ndanglings++;
+		// }
 		
 	}
 
 	NbaseNodes = baseNodes.size();
-	NphysNodes = physIds.size();
+	cout << "added " << NbaseNodes << " base nodes with " << Ndanglings << " dangling state nodes, done!" << endl;
 
 
 	// // Validate out-weights
