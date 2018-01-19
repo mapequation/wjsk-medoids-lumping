@@ -298,9 +298,9 @@ double StateNetwork::randDouble(double to){
 
 double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 
-	// if(stateNode1.stateId == stateNode2.stateId){
-	// 	return 0.0;
-	// }
+	if(&stateNode1 == &stateNode2){
+		return 0.0;
+	}
 
 	double h1 = 0.0; // The entropy rate of the first state node
 	double h2 = 0.0; // The entropy rate of the second state node
@@ -403,7 +403,7 @@ double StateNetwork::wJSdiv(StateNode &stateNode1, StateNode &stateNode2){
 	double div = (w1+w2)*h12 - w1*h1 - w2*h2;
 
 	if(div < epsilon)
-		div = epsilon;
+		div = 0.0;
 
 	// Cached values
 	// cachedWJSdiv[make_pair(stateIndex1,stateIndex2)] = div;
@@ -517,7 +517,7 @@ double StateNetwork::wJSdiv(int stateIndex1, int stateIndex2){
 	double div = (w1+w2)*h12 - w1*h1 - w2*h2;
 
 	if(div < epsilon)
-		div = epsilon;
+		div = 0.0;
 
 	// Cached values
 	// cachedWJSdiv[make_pair(stateIndex1,stateIndex2)] = div;
@@ -908,7 +908,7 @@ void StateNetwork::findCenters(Medoids &medoids){
 		StateNode *firstClusterStateNode = medoid[firstCenterIndex].stateNode;
 		vector<double> firstMinDiv(NstatesInMedoid);
 		double sumFirstMinDiv = 0.0;
-		for(unsigned int i=0;i<NstatesInMedoid;i++){
+		for(unsigned int i=1;i<NstatesInMedoid;i++){
 			double div = wJSdiv(*medoid[i].stateNode,*firstClusterStateNode);
 			firstMinDiv[i] = div;
 			sumFirstMinDiv += div;
@@ -916,14 +916,19 @@ void StateNetwork::findCenters(Medoids &medoids){
 		// Pick new center proportional to minimum divergence
 		// uniform_real_distribution<double> randDouble(0.0,sumFirstMinDiv);
 		// double randMinDivSum = randDouble(mtRands[omp_get_thread_num()]);
-		double randMinDivSum = randDouble(sumFirstMinDiv);
-		double minDivSum = 0.0;
-		for(unsigned int i=0;i<NstatesInMedoid;i++){
-			minDivSum += firstMinDiv[i];
-			if(minDivSum > randMinDivSum){
-				firstCenterIndex = i;
-				break;
+		if(sumFirstMinDiv > 0.0){
+			double randMinDivSum = randDouble(sumFirstMinDiv);
+			double minDivSum = 0.0;
+			for(unsigned int i=1;i<NstatesInMedoid;i++){
+				minDivSum += firstMinDiv[i];
+				if(minDivSum > randMinDivSum){
+					firstCenterIndex = i;
+					break;
+				}
 			}
+		}
+		else{
+			firstCenterIndex = randInt(1,NstatesInMedoid-1);
 		}
 		firstMinDiv = vector<double>(0);
 		// ************* End find state node proportional to distance from random node
@@ -1072,7 +1077,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 			StateNode *lastClusterStateNode = medoid[lastCenter].stateNode;
 			
 			double sumSeedMinDiv = 0.0;
-			for(unsigned int i=lastCenter;i<NstatesInMedoid;i++){
+			for(unsigned int i=lastCenter+1;i<NstatesInMedoid;i++){
 				double div = wJSdiv(*medoid[i].stateNode,*lastClusterStateNode);
 				seedMinDiv[i] = div;
 				sumSeedMinDiv += div;
@@ -1081,17 +1086,22 @@ void StateNetwork::findClusters(Medoids &medoids){
 			// Pick new center proportional to minimum divergence
 			// uniform_real_distribution<double> randDouble(0.0,sumFirstMinDiv);
 			// double randMinDivSum = randDouble(mtRands[omp_get_thread_num()]);
-			double randMinDivSum = randDouble(sumSeedMinDiv);
-			double minDivSum = 0.0;
-			for(unsigned int i=lastCenter;i<NstatesInMedoid;i++){
-				minDivSum += seedMinDiv[i];
-				if(minDivSum >= randMinDivSum){
-					seedCenterIndex = i;
-					break;
+			if(sumSeedMinDiv > 0.0){
+				double randMinDivSum = randDouble(sumSeedMinDiv);
+				double minDivSum = 0.0;
+				for(unsigned int i=lastCenter+1;i<NstatesInMedoid;i++){
+					minDivSum += seedMinDiv[i];
+					if(minDivSum >= randMinDivSum){
+						seedCenterIndex = i;
+						break;
+					}
 				}
 			}
+			else{
+				seedCenterIndex = randInt(lastCenter+1,NstatesInMedoid-1);
+			}
 
-			// cout << lastCenter << " " << sumSeedMinDiv << " " << minDivSum << endl;
+			// cout << "+ " << lastCenter << " " << sumSeedMinDiv << " " << minDivSum << " " << seedCenterIndex << " " << Ncenters << endl;
 
 			// ************* End find state node proportional to distance from random node
 	
@@ -1099,6 +1109,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 			minDivSumInMedoid -= medoid[seedCenterIndex].minDiv;
 			medoid[seedCenterIndex].minDiv = 0.0;
 			// Put the center in first non-center position (Ncenters = 0) by swapping elements
+			// cout << "+- " << Ncenters << " " << seedCenterIndex << endl;
 			swap(medoid[Ncenters],medoid[seedCenterIndex]);
 			Ncenters++;
 
@@ -1144,6 +1155,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 				aggregatedClusters[bestCluster].links[linkIt->first] += linkIt->second;
 			}
 			medoid[randStateId].minCenterStateNode = medoid[bestCluster].stateNode;
+			// cout << "+-- " << randStateId << " " << bestCluster << endl;
 		}
 
 	}
@@ -1152,9 +1164,7 @@ void StateNetwork::findClusters(Medoids &medoids){
   // double localSumMinDiv = 0.0;
 	unordered_map<int,pair<double,vector<LocalStateNode> > > newMedoids;
 	unordered_map<int,pair<double,vector<LocalStateNode> > >::iterator newMedoids_it;
-
 	for(unsigned int i=0;i<NstatesInMedoid;i++){
-
 		int centerId = medoid[i].minCenterStateNode->stateId;
 		// double minDiv = medoid[i].minDiv;
 		// localSumMinDiv += minDiv;
@@ -1475,11 +1485,9 @@ void StateNetwork::lumpStateNodes(){
 
 	#ifdef _OPENMP
 	// Initiate locks to keep track of best solutions
-	omp_lock_t lock[NbaseNodes];
-	for (int i=0; i<NbaseNodes; i++){
-		// cout << i << " " << endl;
+	vector<omp_lock_t> lock(NbaseNodes);
+	for (int i=0; i<NbaseNodes; i++)
     omp_init_lock(&(lock[i]));
-	}
 	#endif
 
 	// To keept track of best solutions
@@ -1609,14 +1617,15 @@ void StateNetwork::lumpStateNodes(){
 	} // end of #pragma omp parallel
 	cout << endl << "-->Updating state node ids" << endl;
 
+	#ifdef _OPENMP
+	for (int i=0; i<NbaseNodes; i++)
+    omp_destroy_lock(&(lock[i]));
+  #endif
+
 	updateBaseNodes();
 	updateStateNodeIds();
 	// updateStateNodes();
 
-	#ifdef _OPENMP
-	for (int i=0; i<NbaseNodes; i++)
-    omp_destroy_lock(&(lock[i]));
-  	#endif
 }
 
 bool StateNetwork::readBlockLines(string &line,vector<string> &lines){
