@@ -152,6 +152,7 @@ BaseNode::BaseNode(int physid){
 class StateNetwork{
 private:
 	double calcEntropyRate();
+	// pair<double,double> calcEntropyRate(vector<int> &stateNodeId);
 	double calcEntropyRate(BaseNode &baseNode);
 	double calcEntropyRate(Medoids &medoids);
 	double calcEntropyRate(ContextClusters &contextClusters);
@@ -216,15 +217,16 @@ private:
 	int Ndanglings = 0;
 	int Ncontexts = 0;
 	int NclusterContexts = 0;
-	unsigned int NfinalClu;
-	unsigned int NsplitClu;
+	unsigned int NfinalClu = 100;
+	unsigned int NsplitClu = 2;
+	double maxEntropy = 100.0;
 	unordered_map<int,int> stateNodeIdMapping;
 	map<int,int> stateNodeBaseNodeMapping;
 	unordered_map<int,BaseNode> baseNodes;
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,string clusterFileName,string containerOutFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed); 
+	StateNetwork(string inFileName,string outFileName,string clusterFileName,string containerOutFileName,unsigned int NfinalClu,double maxEntropy,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed); 
 	void lumpStateNodes();
 	// void loadNodeMapping();
 	bool loadStateNetworkBatch();
@@ -240,8 +242,9 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFileName,string containerOutFileName,unsigned int NfinalClu,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed){
+StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFileName,string containerOutFileName,unsigned int NfinalClu,double maxEntropy,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed){
 	this->NfinalClu = NfinalClu;
+	this->maxEntropy = maxEntropy;
 	this->NsplitClu = NsplitClu;
 	this->Nattempts = Nattempts;
 	this->order = order;
@@ -630,6 +633,28 @@ double StateNetwork::calcEntropyRate(ContextClusters &contextClusters){
 
 }
 
+// pair<double,double> StateNetwork::calcEntropyRate(vector<int> &stateNodeIds){
+
+// 	double h = 0.0;
+// 	double maxH = 0.0;
+
+// 	for(vector<int>::iterator stateNodeId_it = stateNodeIds.begin(); stateNodeId_it != stateNodeIds.end(); stateNodeId_it++){
+
+// 		StateNode &stateNode = stateNodes[(*stateNodeId_it)];
+// 		double H = 0.0;
+// 		for(map<int,double>::iterator it_link = stateNode.links.begin(); it_link != stateNode.links.end(); it_link++){
+// 			double p = it_link->second/stateNode.outWeight;
+// 			H -= p*log2(p);
+// 		}
+// 		H = stateNode.outWeight*H/totWeight;
+// 		maxH = max(maxH,H);
+// 		h += H;
+// 	}
+
+// 	return make_pair(h,maxH);
+
+// }
+
 double StateNetwork::calcEntropyRate(vector<LocalStateNode> &medoid){
 
 	double h = 0.0;
@@ -1017,8 +1042,6 @@ void StateNetwork::findCenters(Medoids &medoids){
 
 	}
 
-
-
 	// Remove the split medoid
 	medoids.sumMinDiv -= medoids.sortedMedoids.begin()->first;
 	medoids.maxNstatesInMedoid = min(medoids.maxNstatesInMedoid,static_cast<unsigned int>(medoids.sortedMedoids.begin()->second.size()));
@@ -1034,7 +1057,7 @@ void StateNetwork::findCenters(Medoids &medoids){
 		medoids.sortedMedoids.insert(move(newMedoids_it->second));
 	} 
 
-	if(medoids.sortedMedoids.size() < NfinalClu)
+	if(medoids.sortedMedoids.size() < NfinalClu && medoids.sortedMedoids.begin()->first > maxEntropy)
 		findCenters(medoids);
 
 }
@@ -1200,7 +1223,7 @@ void StateNetwork::findClusters(Medoids &medoids){
 		medoids.sortedMedoids.insert(move(newMedoids_it->second));
 	} 
 
-	if(medoids.sortedMedoids.size() < NfinalClu)
+	if(medoids.sortedMedoids.size() < NfinalClu && medoids.sortedMedoids.begin()->first > maxEntropy)
 		findClusters(medoids);
 
 }
@@ -1494,6 +1517,7 @@ void StateNetwork::lumpStateNodes(){
 	vector<int> attemptsLeftVec(NbaseNodes,0);
 	// vector<vector<pair<int,double> > > runDetails(NbaseNodes);
 	vector<double> bestEntropyRate(NbaseNodes);
+	vector<double> preLumpingEntropyRateVec(NbaseNodes);
 	vector<Medoids> bestMedoids(NbaseNodes);
 
 	// To be able to parallelize loop over base nodes
@@ -1503,7 +1527,9 @@ void StateNetwork::lumpStateNodes(){
 	vector<BaseNode*> baseNodeVec;
 	for(unordered_map<int,BaseNode>::iterator base_it = baseNodes.begin(); base_it != baseNodes.end(); base_it++){
 		unsigned int NPstateNodes = base_it->second.stateNodeIndices.size();
-		if(NPstateNodes > NfinalClu){
+		double baseNodeEntropyRate = calcEntropyRate(base_it->second);
+		preLumpingEntropyRateVec[baseNodeNr] = baseNodeEntropyRate;
+		if(NPstateNodes > NfinalClu || baseNodeEntropyRate > maxEntropy){
 			// Non-trivial problem with need for multiple attempts
 			bestEntropyRate[baseNodeNr] = 100.0;
 			for(int i=0;i<Nattempts;i++){
@@ -1539,9 +1565,9 @@ void StateNetwork::lumpStateNodes(){
 					int physNodeNr = baseNode.physicalId;
 
 					unsigned int NPstateNodes = baseNode.stateNodeIndices.size();
-					double preLumpingEntropyRate = calcEntropyRate(baseNode);
+					double preLumpingEntropyRate = preLumpingEntropyRateVec[baseNodeNr];
 
-					if(NPstateNodes > NfinalClu){
+					if(NPstateNodes > NfinalClu || preLumpingEntropyRate > maxEntropy){
 
 						// Initialize vector of vectors with state nodes in base node with minimum necessary information
 						// The first NsplitClu elements will be centers
@@ -1605,9 +1631,12 @@ void StateNetwork::lumpStateNodes(){
 
 			
 					}
+					else if(preLumpingEntropyRate <= maxEntropy){
+
+					}
 					else{
 
-						string output = "\n-->Did not touch " + to_string(NPstateNodes) + " states in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+						string output = "\n-->Did not touch " + to_string(NPstateNodes) + " states with total divergence " + to_string(preLumpingEntropyRate) + " in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
 						cout << output;
 					}
 					
@@ -2284,6 +2313,7 @@ void StateNetwork::printStateNodeContainer(){
 
 		my_ofstream ofs;
   	ofs.open(containerOutFileName.c_str());
+  	ofs << "#stateId containerId" << endl;
   	for(map<int,int>::iterator it = stateNodeBaseNodeMapping.begin(); it != stateNodeBaseNodeMapping.end(); it++)
   		ofs << it->first << " " << it->second << endl;
 

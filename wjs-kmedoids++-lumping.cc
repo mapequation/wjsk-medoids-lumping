@@ -20,7 +20,7 @@ int main(int argc,char *argv[]){
   cout << endl;
 
   // Parse command input
-  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <number of clusters>] [--max-order <max Markov order>] [-d <number of clusters in each division (>= 2)>] [--fast] [--batchoutput] [--context-clusters lumped_state_network.net] input_state_network.net output_state_network.net [output_state_container.txt]\n";
+  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <max number of clusters>] [-e <max entropy in lumped state node>] [--max-order <max Markov order>] [-d <number of clusters in each division (>= 2)>] [--fast] [--batchoutput] [--context-clusters lumped_state_network.net] input_state_network.net output_state_network.net [output_state_container.txt]\n";
   if( argc == 1 ){
     cout << CALL_SYNTAX;
     exit(-1);
@@ -35,6 +35,7 @@ int main(int argc,char *argv[]){
   int argNr = 1;
   unsigned int NfinalClu = 100;
   unsigned int NsplitClu = 2;
+  double maxEntropy = 100.0;
   int Nattempts = 1;
   int order = -1;
   bool batchOutput = false;
@@ -77,6 +78,11 @@ int main(int argc,char *argv[]){
       NfinalClu = atoi(argv[argNr]);
       argNr++;
     }
+    else if(to_string(argv[argNr]) == "-e"){
+      argNr++;
+      maxEntropy = atof(argv[argNr]);
+      argNr++;
+    }
     else if(to_string(argv[argNr]) == "-d"){
       argNr++;
       NsplitClu = atoi(argv[argNr]);
@@ -109,7 +115,8 @@ int main(int argc,char *argv[]){
   
   cout << "Setup:" << endl;
   cout << "-->Using seed: " << seed << endl;
-  cout << "-->Will lump state nodes into number of clusters per physical node: " << NfinalClu << endl;
+  cout << "-->Will lump state nodes into max number of clusters per physical node: " << NfinalClu << endl;
+  cout << "-->Will lump state nodes into max entropy per state node: " << maxEntropy << endl;
   cout << "-->Will iteratively divide worst cluster into number of clusters: " << NsplitClu << endl;
   cout << "-->Will make number of attempts: " << Nattempts << endl;
   if(order > 1)
@@ -131,7 +138,7 @@ int main(int argc,char *argv[]){
   if(containerOutFileName != "")
     cout << "-->Will write state node container assignments to: " << containerOutFileName << endl;
 
-  StateNetwork statenetwork(inFileName,outFileName,clusterFileName,containerOutFileName,NfinalClu,NsplitClu,Nattempts,order,fast,batchOutput,seed);
+  StateNetwork statenetwork(inFileName,outFileName,clusterFileName,containerOutFileName,NfinalClu,maxEntropy,NsplitClu,Nattempts,order,fast,batchOutput,seed);
 
   int NprocessedBatches = 0;
   while(statenetwork.loadStateNetworkBatch()){ // NprocessedBatches < 5 && 

@@ -14,9 +14,10 @@ just run 'make' in the current directory to compile the
 code with the included Makefile.
 
 
-Call: ./dangling-lumping [-s \<seed\>]  [-N \<number of attempts\>] [-k \<number of clusters\>] [--max-order \<max Markov order\>] [-d \<number of clusters in each division (>= 2)\>] [--fast] [--batchoutput] [--context-clusters lumped_state_network.net] input_state_network.net output_state_network.net  
+Call: ./dangling-lumping [-s \<seed\>]  [-N \<number of attempts\>] [-k \<max number of clusters\>] [-e \<max entropy in lumped state node\>] [--max-order \<max Markov order\>] [-d \<number of clusters in each division (>= 2)\>] [--fast] [--batchoutput] [--context-clusters lumped_state_network.net] input_state_network.net output_state_network.net  
 seed: Any positive integer.  
-number of clusters: The preferred number of clusters per physical node. Default is 100. 
+max number of clusters: The max number of clusters per physical node if max entropy is not met. Default is 100.
+max entropy in lumped state node: The max entropy rate in lumped state node if max number of clusters is not met. Default is no limit.  
 max Markov order: First lump based on contexts to max Markov order.  
 nunmber of attempts: The number of attempts to optimize the cluster assignments of each physical node. Default is 1.  
 number of clusters in each division (>= 2): The number of clusters the cluster with highest weighted Jensen-Shannon divergence will be divided into. Default is 2.  

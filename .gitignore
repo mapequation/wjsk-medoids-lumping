@@ -50,3 +50,7 @@ tests.txt
 PNAS_States_N1000_2007_4grams_wjs.netmake
 
 *.tree
+
+ngrams_N100_2008_normalized_network-state_1batches_nodangling_k10_o2_containers.txt
+
+ngrams_N100_2008_normalized_network-state_1batches_nodangling_k10_o2_k10_o3_containers.txt
