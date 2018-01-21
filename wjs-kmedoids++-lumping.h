@@ -1408,32 +1408,30 @@ void StateNetwork::updateStateNodeIds(){
 		for(unsigned int i=0;i<NPstateNodes;i++){
 			int stateId = baseNode.stateNodeIndices[i];
 			StateNode &stateNode = stateNodes[stateId];
-			
 			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
 			stateNode.updatedStateId = updatedStateId;
 			stateNodeBaseNodeMapping[updatedStateId] = base_it->first;
-			updatedStateId++;
 			for(vector<int>::iterator lumpedStateId_it = stateNode.lumpedStateIds.begin(); lumpedStateId_it != stateNode.lumpedStateIds.end(); lumpedStateId_it++){
 				int lumpedStateId = *lumpedStateId_it;
 				stateNodeIdMapping[lumpedStateId] = updatedStateId;
 				stateNodes[lumpedStateId].updatedStateId = updatedStateId;
 			}
+			updatedStateId++;
 		}
 
 		unsigned int NPdanglingStateNodes = baseNode.stateNodeDanglingIndices.size();
 		for(unsigned int i=0;i<NPdanglingStateNodes;i++){
 			int stateId = baseNode.stateNodeDanglingIndices[i];
 			StateNode &stateNode = stateNodes[stateId];
-			
 			stateNodeIdMapping[stateNode.stateId] = updatedStateId;
 			stateNode.updatedStateId = updatedStateId;
 			stateNodeBaseNodeMapping[updatedStateId] = base_it->first;
-			updatedStateId++;
 			for(vector<int>::iterator lumpedStateId_it = stateNode.lumpedStateIds.begin(); lumpedStateId_it != stateNode.lumpedStateIds.end(); lumpedStateId_it++){
 				int lumpedStateId = *lumpedStateId_it;
 				stateNodeIdMapping[lumpedStateId] = updatedStateId;
 				stateNodes[lumpedStateId].updatedStateId = updatedStateId;
 			}
+			updatedStateId++;
 		}
 
 	}
