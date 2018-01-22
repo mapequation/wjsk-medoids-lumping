@@ -35,7 +35,7 @@ int main(int argc,char *argv[]){
   int argNr = 1;
   unsigned int NfinalClu = 100;
   unsigned int NsplitClu = 2;
-  double maxEntropy = 100.0;
+  double maxEntropy = -1.0;
   int Nattempts = 1;
   int order = -1;
   bool batchOutput = false;
@@ -115,8 +115,9 @@ int main(int argc,char *argv[]){
   
   cout << "Setup:" << endl;
   cout << "-->Using seed: " << seed << endl;
-  cout << "-->Will lump state nodes into max number of clusters per physical node: " << NfinalClu << endl;
-  cout << "-->Will lump state nodes into max entropy per state node: " << maxEntropy << endl;
+  cout << "-->Will lump state nodes into max number of clusters per container node: " << NfinalClu << endl;
+  if(maxEntropy > 0.0)
+    cout << "-->Will lump state nodes into max entropy per state node: " << maxEntropy << endl;
   cout << "-->Will iteratively divide worst cluster into number of clusters: " << NsplitClu << endl;
   cout << "-->Will make number of attempts: " << Nattempts << endl;
   if(order > 1)
