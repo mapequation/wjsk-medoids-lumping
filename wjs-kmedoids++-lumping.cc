@@ -20,7 +20,7 @@ int main(int argc,char *argv[]){
   cout << endl;
 
   // Parse command input
-  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <max number of clusters>] [-e <max entropy in lumped state node>] [--max-order <max Markov order>] [-d <number of clusters in each division (>= 2)>] [--fast] [--batchoutput] [--context-clusters lumped_state_network.net] input_state_network.net output_state_network.net [output_state_container.txt]\n";
+  const string CALL_SYNTAX = "Call: ./dangling-lumping [-s <seed>] [-N <number of attempts>] [-k <max number of clusters>] [-e <max entropy in lumped state node>] [--max-order <max Markov order>] [-d <number of clusters in each division (>= 2)>] [--fast] [--batchoutput] [--state-containers state_assignments.txt] [--context-containers lumped_state_network.net] input_state_network.net output_state_network.net [output_state_container.txt]\n";
   if( argc == 1 ){
     cout << CALL_SYNTAX;
     exit(-1);
@@ -30,7 +30,8 @@ int main(int argc,char *argv[]){
   string inFileName;
   string outFileName;
   string containerOutFileName = "";
-  string clusterFileName = "";
+  string containerInFileName = "";
+  string contextInFileName = "";
 
   int argNr = 1;
   unsigned int NfinalClu = 100;
@@ -68,11 +69,18 @@ int main(int argc,char *argv[]){
       order = atoi(argv[argNr]);
       argNr++;
     }
-    else if(to_string(argv[argNr]) == "--context-clusters"){
+    else if(to_string(argv[argNr]) == "--context-containers"){
       argNr++;
-      clusterFileName = string(argv[argNr]);
+      contextInFileName = string(argv[argNr]);
       argNr++;
-    }    
+      containerInFileName = "";
+    }   
+    else if(to_string(argv[argNr]) == "--state-containers"){
+      argNr++;
+      containerInFileName = string(argv[argNr]);
+      argNr++;
+      contextInFileName = "";
+    }  
     else if(to_string(argv[argNr]) == "-k"){
       argNr++;
       NfinalClu = atoi(argv[argNr]);
@@ -128,8 +136,10 @@ int main(int argc,char *argv[]){
     cout << "-->Will use medoid center to approximate cluster entropy rate during assignment." << endl;
   else
     cout << "-->Will use aggregate cluster to calculate entropy rate during assignment." << endl;
-  if(clusterFileName != "")
-    cout << "-->Will lump higher-order states in clusters of lumped state network file: " << clusterFileName << endl;
+  if(contextInFileName != "")
+    cout << "-->Will lump higher-order states in context containers of lumped state network file: " << contextInFileName << endl;
+  if(containerInFileName != "")
+    cout << "-->Will lump states in containers of state-to-container assignment file: " << containerInFileName << endl;
   // if(tune)
   //   cout << "-->Will tune medoids for bestter accuracy." << endl;
   // else
@@ -139,7 +149,7 @@ int main(int argc,char *argv[]){
   if(containerOutFileName != "")
     cout << "-->Will write state node container assignments to: " << containerOutFileName << endl;
 
-  StateNetwork statenetwork(inFileName,outFileName,clusterFileName,containerOutFileName,NfinalClu,maxEntropy,NsplitClu,Nattempts,order,fast,batchOutput,seed);
+  StateNetwork statenetwork(inFileName,outFileName,contextInFileName,containerInFileName,containerOutFileName,NfinalClu,maxEntropy,NsplitClu,Nattempts,order,fast,batchOutput,seed);
 
   int NprocessedBatches = 0;
   while(statenetwork.loadStateNetworkBatch()){ // NprocessedBatches < 5 && 

@@ -173,6 +173,7 @@ private:
 	bool readContextBlockLines(string &line);
 	bool readLines(vector<string> &stateLines,vector<string> &linkLines,vector<string> &contextLines);
 	bool readContextLines(vector<string> &contextLines);
+	bool readContainerLines(unordered_map<int,int> &stateContainer);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line,int &batchNr);
 	void writeLines(ifstream &ifs_tmp, ofstream &ofs, WriteMode &writeMode, string &line);
 	int randInt(int from, int to);
@@ -181,7 +182,8 @@ private:
 	// For all batches
 	string inFileName;
 	string outFileName;
-	string clusterFileName;
+	string contextInFileName;
+	string containerInFileName;
 	string containerOutFileName;
 	string tmpOutFileName;
 	string tmpOutFileNameStates;
@@ -193,9 +195,11 @@ private:
 	bool fast = false;
 	vector<mt19937> mtRands;
 	ifstream ifs;
-	ifstream cluster_ifs;
+	ifstream container_ifs;
+	ifstream context_ifs;
   string line;
-  bool readClusterFile = false;
+  bool readContextFile = false;
+  bool readContainerFile = false;
   double totWeight = 0.0;
   double accumWeight = 0.0;
   int updatedStateId = 0;
@@ -228,7 +232,7 @@ private:
 	unordered_map<int,StateNode> stateNodes;
 
 public:
-	StateNetwork(string inFileName,string outFileName,string clusterFileName,string containerOutFileName,unsigned int NfinalClu,double maxEntropy,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed); 
+	StateNetwork(string inFileName,string outFileName,string contextInFileName,string containerInFileName,string containerOutFileName,unsigned int NfinalClu,double maxEntropy,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed); 
 	void lumpStateNodes();
 	// void loadNodeMapping();
 	bool loadStateNetworkBatch();
@@ -244,7 +248,7 @@ public:
 
 };
 
-StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFileName,string containerOutFileName,unsigned int NfinalClu,double maxEntropy,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed){
+StateNetwork::StateNetwork(string inFileName,string outFileName,string contextInFileName,string containerInFileName,string containerOutFileName,unsigned int NfinalClu,double maxEntropy,unsigned int NsplitClu,int Nattempts,int order,bool fast,bool batchOutput,int seed){
 	this->NfinalClu = NfinalClu;
 	this->maxEntropy = maxEntropy;
 	if(maxEntropy > 0)
@@ -256,7 +260,8 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFi
 	this->batchOutput = batchOutput;
 	this->inFileName = inFileName;
 	this->outFileName = outFileName;
-	this->clusterFileName = clusterFileName;
+	this->contextInFileName = contextInFileName;
+	this->containerInFileName = containerInFileName;
 	this->containerOutFileName = containerOutFileName;
 	this->tmpOutFileName = string(outFileName).append("_tmp");
 	this->tmpOutFileNameStates = string(outFileName).append("_tmpstates");
@@ -282,10 +287,14 @@ StateNetwork::StateNetwork(string inFileName,string outFileName,string clusterFi
 	line = "First line";
 	ifs.open(inFileName.c_str());
 	
-	if(clusterFileName != ""){
-		readClusterFile = true;
-		cluster_ifs.open(clusterFileName.c_str());
+	if(contextInFileName != ""){
+		readContextFile = true;
+		context_ifs.open(contextInFileName.c_str());
 	}
+	else if(containerInFileName != ""){
+		readContainerFile = true;
+		container_ifs.open(containerInFileName.c_str());
+	}	
 
 }
 
@@ -1090,7 +1099,7 @@ void StateNetwork::findCenters(Medoids &medoids){
 		medoids.sortedMedoids.insert(move(newMedoids_it->second));
 	} 
 
-	if(medoids.sortedMedoids.size() < NfinalClu)
+	if(medoids.sortedMedoids.size() < NfinalClu && medoids.sortedMedoids.begin()->first > maxEntropy)
 		findCenters(medoids);
 
 }
@@ -1456,22 +1465,25 @@ void StateNetwork::updateBaseNodes(){
 
 	// Update baseNodes
 	Nlinks = 0; // Update number of links
-	NstateNodes = 0; // Update number of links
+	NstateNodes = 0; // Update number of state nodes
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 		StateNode &stateNode = it->second;
 		if(stateNode.active){
 			Nlinks += stateNode.links.size(); // Update number of links
 			NstateNodes++;
-
 			unordered_map<int,BaseNode>::iterator baseNode_it = baseNodes.find(stateNode.baseId);
-			if(baseNode_it == baseNodes.end())
+			if(baseNode_it == baseNodes.end()){
 				baseNode_it = baseNodes.insert(baseNodes.end(),{stateNode.baseId,BaseNode(stateNode.physId)});
+				NbaseNodes++;
+			}
 			if(stateNode.outWeight > epsilon)
 				baseNode_it->second.stateNodeIndices.push_back(stateNode.stateId);
 			else
 				baseNode_it->second.stateNodeDanglingIndices.push_back(stateNode.stateId);
 		}
 	}
+
+	NbaseNodes = baseNodes.size(); // Update number of base nodes
 
 }
 
@@ -1602,7 +1614,7 @@ void StateNetwork::lumpStateNodes(){
 		unsigned int NBstateNodes = base_it->second.stateNodeIndices.size();
 		pair<double,double> baseNodeEntropyRate = calcLumpedEntropyRate(base_it->second);
 		lumpingEntropyRateVec[baseNodeNr] = baseNodeEntropyRate;
-		if((!checkMaxEntropy && NBstateNodes > NfinalClu) || (checkMaxEntropy && baseNodeEntropyRate.second > maxEntropy)){
+		if(NBstateNodes > 1 && ((!checkMaxEntropy && NBstateNodes > NfinalClu) || (checkMaxEntropy && baseNodeEntropyRate.second > maxEntropy))){
 			// Non-trivial problem with need for multiple attempts
 			bestEntropyRate[baseNodeNr] = 100.0;
 			for(int i=0;i<Nattempts;i++){
@@ -1640,7 +1652,7 @@ void StateNetwork::lumpStateNodes(){
 					unsigned int NBstateNodes = baseNode.stateNodeIndices.size();
 					double preLumpingEntropyRate = lumpingEntropyRateVec[baseNodeNr].first;
 					double completeLumpingEntropyRate = lumpingEntropyRateVec[baseNodeNr].second;
-					if((!checkMaxEntropy && NBstateNodes > NfinalClu) || (checkMaxEntropy && completeLumpingEntropyRate > maxEntropy)){
+					if(NBstateNodes > 1 && ((!checkMaxEntropy && NBstateNodes > NfinalClu) || (checkMaxEntropy && completeLumpingEntropyRate > maxEntropy))){
 
 						// Initialize vector of vectors with state nodes in base node with minimum necessary information
 						// The first NsplitClu elements will be centers
@@ -1696,7 +1708,11 @@ void StateNetwork::lumpStateNodes(){
 							// Perform the lumping and update stateNodes
 							performLumping(bestMedoids[baseNodeNr]);
 							double postLumpingEntropyRate = bestEntropyRate[baseNodeNr];
-							string output = "\n-->Lumped " + to_string(NBstateNodes) + " states to " + to_string(bestMedoids[baseNodeNr].sortedMedoids.size()) + " states with max entropy rate " + to_string(bestMedoids[baseNodeNr].sortedMedoids.begin()->first) + ", total entropy rate " + to_string(bestMedoids[baseNodeNr].sumMinDiv) + ", and " +  to_string(100.0*fabs(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate).substr(0,4) + "\% entropy rate increase after " + to_string(Nattempts) + " attempt(s) in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+							string output;
+							if(NBstateNodes > bestMedoids[baseNodeNr].sortedMedoids.size())
+								output = "\n-->Lumped " + to_string(NBstateNodes) + " states to " + to_string(bestMedoids[baseNodeNr].sortedMedoids.size()) + " states with max entropy rate " + to_string(bestMedoids[baseNodeNr].sortedMedoids.begin()->first) + ", total entropy rate " + to_string(bestMedoids[baseNodeNr].sumMinDiv) + ", and " +  to_string(100.0*fabs(postLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate).substr(0,4) + "\% entropy rate increase after " + to_string(Nattempts) + " attempt(s) in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+							else
+								output = "\n-->Did not lump " + to_string(NBstateNodes) + " states with max entropy rate " + to_string(bestMedoids[baseNodeNr].sortedMedoids.begin()->first) + " and total entropy rate " + to_string(bestMedoids[baseNodeNr].sumMinDiv) + " after " + to_string(Nattempts) + " attempt(s) in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
 							cout << output;
 
 						}
@@ -1710,7 +1726,7 @@ void StateNetwork::lumpStateNodes(){
 
 			
 					}
-					else if(completeLumpingEntropyRate <= maxEntropy){
+					else if(NBstateNodes > 1 && completeLumpingEntropyRate <= maxEntropy){
 
 						performLumping(baseNode);
 						string output = "\n-->Complete lumping of " + to_string(NBstateNodes) + " states with total entropy rate " + to_string(preLumpingEntropyRate) + " and " + to_string(100.0*fabs(completeLumpingEntropyRate-preLumpingEntropyRate)/preLumpingEntropyRate).substr(0,4) + "\% entropy rate increase in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
@@ -1719,7 +1735,7 @@ void StateNetwork::lumpStateNodes(){
 					}
 					else{
 
-						string output = "\n-->Did not touch " + to_string(NBstateNodes) + " states with total divergence " + to_string(preLumpingEntropyRate) + " in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
+						string output = "\n-->Did not touch " + to_string(NBstateNodes) + " state(s) with total divergence " + to_string(preLumpingEntropyRate) + " in base node " + to_string(baseNodeNr+1) + "/" + to_string(NbaseNodes) + " in physical node " + to_string(physNodeNr+1) + "/" + to_string(NphysNodes) + ".               ";
 						cout << output;
 					}
 					
@@ -1756,7 +1772,7 @@ bool StateNetwork::readBlockLines(string &line,vector<string> &lines){
 
 bool StateNetwork::readContextBlockLines(string &line,vector<string> &lines){
 	
-	while(getline(cluster_ifs,line)){
+	while(getline(context_ifs,line)){
 		if(line[0] == '*'){
 			return true;
 		}
@@ -1770,7 +1786,7 @@ bool StateNetwork::readContextBlockLines(string &line,vector<string> &lines){
 
 bool StateNetwork::readContextBlockLines(string &line){
 	
-	while(getline(cluster_ifs,line)){
+	while(getline(context_ifs,line)){
 		if(line[0] == '*'){
 			return true;
 		}
@@ -1858,7 +1874,7 @@ bool StateNetwork::readContextLines(vector<string> &contextLines){
 	if(keepReadingClusters){
 		cout << "Reading lumped statenetwork, batch " << Nbatches+1 << ":" << endl;
 		if(line[0] != '*'){
-			while(getline(cluster_ifs,line)){
+			while(getline(context_ifs,line)){
 				if(line[0] == '*')
 					break;
 				size_t foundTotSize = line.find("# Weight: ");
@@ -1907,6 +1923,28 @@ bool StateNetwork::readContextLines(vector<string> &contextLines){
 
 }
 
+bool StateNetwork::readContainerLines(unordered_map<int,int> &stateContainer){
+
+	string buf;
+	istringstream ss;
+	string line;
+
+	while(getline(container_ifs,line)){
+		if(line[0] != '#'){
+			ss.clear();
+			ss.str(line);
+			ss >> buf;
+			int stateId = atoi(buf.c_str());
+			ss >> buf;
+			int containerId = atoi(buf.c_str());
+			stateContainer[stateId] = containerId;
+		}
+	}
+
+	return true;
+
+}
+
 // void StateNetwork::loadNodeMapping(){
 
 // 	string buf;
@@ -1945,11 +1983,12 @@ bool StateNetwork::loadStateNetworkBatch(){
 	istringstream ss;
 
 	// Use lumped state network for clusters
-	unordered_map<string,int> stateClusters;
+	unordered_map<string,int> stateContextContainer;
+	unordered_map<int,int> stateContainer;
 
-	if(readClusterFile){
-		vector<string> clusterContextLines;
-		bool processLines = readContextLines(clusterContextLines);
+	if(readContextFile){
+		vector<string> contextContainerLines;
+		bool processLines = readContextLines(contextContainerLines);
 		if(!processLines)
 			return false;
 
@@ -1957,15 +1996,19 @@ bool StateNetwork::loadStateNetworkBatch(){
 		cout << "-->Processing " << NclusterContexts  << " contexts..." << flush;
 		for(int i=0;i<NclusterContexts;i++){
 			ss.clear();
-			ss.str(clusterContextLines[i]);
+			ss.str(contextContainerLines[i]);
 			ss >> buf;
-			int clusterId = atoi(buf.c_str());
-			string context = clusterContextLines[i].substr(buf.length()+1);
-			stateClusters[context] = clusterId;
+			int containerId = atoi(buf.c_str());
+			string context = contextContainerLines[i].substr(buf.length()+1);
+			stateContextContainer[context] = containerId;
 		}
 		cout << "done!" << endl;
 
-
+	}
+	else if(readContainerFile){
+		cout << "-->Reading state-to-container assignment file..." << flush;
+		readContainerLines(stateContainer);
+		cout << "found and processed " << stateContainer.size() << " assignments. Done!" << endl;
 	}
 
 
@@ -2044,8 +2087,14 @@ bool StateNetwork::loadStateNetworkBatch(){
 	for(unordered_map<int,StateNode>::iterator it = stateNodes.begin(); it != stateNodes.end(); it++){
 	 	StateNode &stateNode = it->second;
 	 	int baseNodeIndex = stateNode.physId;
-	 	if(readClusterFile)
-	 		baseNodeIndex = stateClusters[stateNode.contexts[0]];
+	 	if(readContextFile){
+	 		baseNodeIndex = stateContextContainer[stateNode.contexts[0]];
+	 		stateNode.baseId = baseNodeIndex;
+	 	}
+	 	else if(readContainerFile){
+	 		baseNodeIndex = stateContainer[stateNode.stateId];
+	 		stateNode.baseId = baseNodeIndex;
+	 	}
 
 	 	unordered_map<int,BaseNode>::iterator baseNode_it = baseNodes.find(baseNodeIndex);
 		if(baseNode_it == baseNodes.end())
@@ -2396,7 +2445,7 @@ void StateNetwork::compileBatches(){
 void StateNetwork::printStateNodeContainer(){
 
 	if(containerOutFileName != ""){
-
+		cout << "Writing " << stateNodeBaseNodeMapping.size() << " state-to-conatiner assignments to " << containerOutFileName << "..." << flush;
 		my_ofstream ofs;
   	ofs.open(containerOutFileName.c_str());
   	ofs << "#stateId containerId" << endl;
@@ -2404,6 +2453,7 @@ void StateNetwork::printStateNodeContainer(){
   		ofs << it->first << " " << it->second << endl;
 
   	ofs.close();
+  	cout << "done!" << endl;
 	}
 
 
