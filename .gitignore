@@ -48,3 +48,7 @@ tests.txt
 .DS_Store
 
 PNAS_States_N1000_2007_4grams_wjs.netmake
+
+*.txt
+
+*.tree
