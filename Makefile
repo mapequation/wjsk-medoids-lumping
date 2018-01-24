@@ -1,6 +1,6 @@
 # Various flags
 #CXX  = clang++
-CXX = g++-6
+CXX = g++-7
 LINK = $(CXX)
 #CXXFLAGS = -std=c++11 -Wall -g 
 #CXXFLAGS = -std=c++11 -Wall -O3
